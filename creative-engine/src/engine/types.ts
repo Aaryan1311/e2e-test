@@ -75,3 +75,25 @@ export interface LayoutResult {
     unusedSpace: number;
   };
 }
+
+/** Result of a single quality check */
+export interface QualityCheck {
+  name: string;
+  passed: boolean;
+  details: string;
+  severity: "error" | "warning";
+}
+
+/** A quality warning with an actionable suggestion */
+export interface QualityWarning {
+  message: string;
+  suggestion: string;
+}
+
+/** Aggregated result of all quality checks */
+export interface QualityCheckResult {
+  passed: boolean;
+  checks: QualityCheck[];
+  warnings: QualityWarning[];
+  score: number;
+}
