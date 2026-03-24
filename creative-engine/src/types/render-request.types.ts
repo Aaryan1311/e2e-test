@@ -33,7 +33,7 @@ export interface RenderResult {
 export const RenderRequestSchema = z.object({
   accountType: z.string().min(1),
   aspectRatios: z.array(z.string().regex(/^\d+:\d+$/)).min(1),
-  backgroundImage: z.string().min(1),
+  backgroundImage: z.string(),
   blocks: z.array(BlockInstanceSchema).min(1),
   subjectPosition: z
     .object({

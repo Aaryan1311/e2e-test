@@ -1,1 +1,1 @@
-onlyBuiltDependencies: ["sharp"]
+onlyBuiltDependencies: ["sharp", "puppeteer"]

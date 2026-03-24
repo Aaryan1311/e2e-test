@@ -13,6 +13,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "puppeteer-core": "^24.40.0",
     "sharp": "^0.34.5",
     "zod": "^4.3.6"
   },
