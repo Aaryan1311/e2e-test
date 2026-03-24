@@ -2,8 +2,9 @@ import type {
   RenderRequest,
   CanvasDefinition,
   ThemeDefinition,
+  LayoutMode,
 } from "../../types/index.js";
-import type { SpatialAnalysisResult, LayoutResult } from "../types.js";
+import type { SpatialAnalysisResult, LayoutResult, ResolvedLayoutConfig } from "../types.js";
 import { sortBlocks } from "./block-sorter.js";
 import { allocateSpace } from "./space-allocator.js";
 import { calculatePositions } from "./position-calculator.js";
@@ -20,36 +21,56 @@ export async function resolveLayout(
   request: RenderRequest,
   canvas: CanvasDefinition,
   theme: ThemeDefinition,
-  spatialResult: SpatialAnalysisResult
+  spatialResult: SpatialAnalysisResult,
+  layoutConfig?: ResolvedLayoutConfig
 ): Promise<LayoutResult> {
+  const layoutMode: LayoutMode = request.layoutMode ?? "split";
+  const textZone = layoutConfig?.textZone ?? spatialResult.textZone;
+  const overlay = layoutConfig?.overlay ?? spatialResult.overlay;
+
+  // For image-forward mode, only use pinned blocks
+  let blocksToResolve = request.blocks;
+  if (layoutMode === "image-forward") {
+    const pinnedTypes = new Set(["disclaimer"]);
+    const stackedInRequest = request.blocks.filter((b) => !pinnedTypes.has(b.type));
+    if (stackedInRequest.length > 0) {
+      console.warn(
+        `[Layout] image-forward mode: ignoring ${stackedInRequest.length} stacked block(s)`
+      );
+    }
+    blocksToResolve = request.blocks.filter((b) => pinnedTypes.has(b.type));
+  }
+
   // Step 1: Resolve and sort blocks
-  const { stacked, pinned } = sortBlocks(request.blocks, theme);
+  const { stacked, pinned } = sortBlocks(blocksToResolve, theme, layoutMode);
 
   // Step 2: Allocate space for stacked blocks
-  const allocation = allocateSpace(
-    stacked,
-    spatialResult.textZone,
-    theme
-  );
+  const allocation = allocateSpace(stacked, textZone, theme);
 
   // Step 3: Calculate final positions
   const positioned = calculatePositions(
     allocation.blocks,
     pinned,
     allocation.allocatedHeights,
-    spatialResult.textZone,
+    textZone,
     canvas,
     theme
   );
 
-  const availableStackedHeight = spatialResult.textZone.height;
+  const availableStackedHeight = textZone.height;
 
   return {
     canvas,
     theme,
     backgroundImage: request.backgroundImage,
-    textZone: spatialResult.textZone,
-    overlay: spatialResult.overlay,
+    layoutMode,
+    layoutConfig: layoutConfig ?? {
+      mode: layoutMode,
+      textZone,
+      overlay,
+    },
+    textZone,
+    overlay,
     stackedBlocks: positioned.stacked,
     pinnedBlocks: positioned.pinned,
     metadata: {

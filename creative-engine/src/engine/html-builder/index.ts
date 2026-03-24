@@ -3,6 +3,7 @@ import { renderBackground } from "./background-renderer.js";
 import { renderOverlay } from "./overlay-renderer.js";
 import { generateFontFaces } from "./font-loader.js";
 import { renderBlock, renderLogo } from "./block-renderer.js";
+import { renderInfinityBridge } from "./infinity-bridge-renderer.js";
 
 /**
  * Builds a complete, self-contained HTML document from a LayoutResult.
@@ -11,22 +12,17 @@ import { renderBlock, renderLogo } from "./block-renderer.js";
  * has already computed exact pixel coordinates. All images and fonts are
  * embedded as base64 data URIs so no external resources are needed.
  *
- * Layer ordering:
- *   z-index 1: Background image
- *   z-index 2: Overlay (gradient/solid for text readability)
- *   z-index 10: Logo, stacked blocks, pinned blocks
+ * Supports three layout modes:
+ * - "split": Content panel + image panel side by side
+ * - "image-overlay": Full-bleed background with gradient overlay
+ * - "image-forward": Full-bleed background, minimal text (pinned only)
  */
 export async function buildHtml(layoutResult: LayoutResult): Promise<string> {
-  const { canvas, theme, backgroundImage, textZone, overlay } = layoutResult;
+  const { canvas, theme, backgroundImage, layoutMode, layoutConfig } = layoutResult;
+  const mode = layoutMode ?? "image-overlay";
 
-  // Build all layers
-  const [backgroundLayer, fontFaces, logoElement] = await Promise.all([
-    renderBackground(backgroundImage, canvas, theme),
-    generateFontFaces(theme),
-    renderLogo(theme, canvas),
-  ]);
-
-  const overlayLayer = renderOverlay(overlay, textZone, canvas);
+  const fontFaces = await generateFontFaces(theme);
+  const logoElement = await renderLogo(theme, canvas);
 
   // Render all blocks
   const stackedBlockElements = layoutResult.stackedBlocks
@@ -36,6 +32,84 @@ export async function buildHtml(layoutResult: LayoutResult): Promise<string> {
   const pinnedBlockElements = layoutResult.pinnedBlocks
     .map((block) => renderBlock(block, theme))
     .join("\n");
+
+  let bodyContent: string;
+
+  if (mode === "split" && layoutConfig?.contentPanel && layoutConfig?.imagePanel) {
+    // Split mode: content panel + image panel
+    const cp = layoutConfig.contentPanel;
+    const ip = layoutConfig.imagePanel;
+
+    const [imagePanelBg] = await Promise.all([
+      renderBackground(backgroundImage, {
+        ...canvas,
+        width: ip.width,
+        height: ip.height,
+      }, theme),
+    ]);
+
+    // Replace the background position to be within the image panel
+    const imagePanelHtml = imagePanelBg.replace(
+      /left:\s*0/,
+      `left: ${ip.x}`
+    ).replace(
+      new RegExp(`width:\\s*${ip.width}px`),
+      `width: ${ip.width}px`
+    );
+
+    const bridgeHtml = renderInfinityBridge(layoutConfig.infinityBridge);
+
+    bodyContent = `
+  <!-- Content Panel -->
+  <div style="
+    position: absolute;
+    left: ${cp.x}px; top: 0;
+    width: ${cp.width}px; height: ${canvas.height}px;
+    background-color: ${cp.backgroundColor};
+    z-index: 1;
+  "></div>
+
+  <!-- Image Panel -->
+  <div style="
+    position: absolute;
+    left: ${ip.x}px; top: 0;
+    width: ${ip.width}px; height: ${ip.height}px;
+    overflow: hidden;
+    z-index: 1;
+  ">
+    ${imagePanelBg.replace(/position:\s*absolute;\s*top:\s*0;\s*left:\s*0/, 'position: absolute; top: 0; left: 0').replace(new RegExp(`width:\\s*\\d+px`), `width: ${ip.width}px`).replace(new RegExp(`height:\\s*\\d+px`), `height: ${ip.height}px`)}
+  </div>
+
+  ${bridgeHtml}
+  ${logoElement}
+  ${stackedBlockElements}
+  ${pinnedBlockElements}`;
+
+  } else if (mode === "image-forward") {
+    // Image-forward mode: full-bleed image, only pinned blocks
+    const [backgroundLayer] = await Promise.all([
+      renderBackground(backgroundImage, canvas, theme),
+    ]);
+
+    bodyContent = `
+  ${backgroundLayer}
+  ${logoElement}
+  ${pinnedBlockElements}`;
+
+  } else {
+    // Image-overlay mode (default/existing behavior)
+    const [backgroundLayer] = await Promise.all([
+      renderBackground(backgroundImage, canvas, theme),
+    ]);
+    const overlayLayer = renderOverlay(layoutResult.overlay, layoutResult.textZone, canvas);
+
+    bodyContent = `
+  ${backgroundLayer}
+  ${overlayLayer}
+  ${logoElement}
+  ${stackedBlockElements}
+  ${pinnedBlockElements}`;
+  }
 
   return `<!DOCTYPE html>
 <html>
@@ -53,11 +127,7 @@ export async function buildHtml(layoutResult: LayoutResult): Promise<string> {
   </style>
 </head>
 <body>
-  ${backgroundLayer}
-  ${overlayLayer}
-  ${logoElement}
-  ${stackedBlockElements}
-  ${pinnedBlockElements}
+  ${bodyContent}
 </body>
 </html>`;
 }

@@ -3,10 +3,19 @@ import type {
   BlockDefinition,
   BlockStyles,
   ThemeDefinition,
+  LayoutMode,
 } from "../../types/index.js";
 
 /**
- * Merges block styles using a three-level cascade:
+ * Merges block styles using a cascade that depends on layout mode:
+ *
+ * For split mode:
+ *   Level 1 (lowest): BlockDefinition.defaultStyles
+ *   Level 2: ThemeDefinition.blockOverrides[blockType]
+ *   Level 3: ThemeDefinition.splitModeBlockOverrides[blockType]
+ *   Level 4 (highest): BlockInstance.styleOverrides
+ *
+ * For other modes:
  *   Level 1 (lowest): BlockDefinition.defaultStyles
  *   Level 2: ThemeDefinition.blockOverrides[blockType]
  *   Level 3 (highest): BlockInstance.styleOverrides
@@ -17,7 +26,8 @@ import type {
 export function mergeStyles(
   block: BlockInstance,
   definition: BlockDefinition,
-  theme: ThemeDefinition
+  theme: ThemeDefinition,
+  layoutMode?: LayoutMode
 ): Required<BlockStyles> {
   // Global defaults — the safety net for any property not set at any level
   const globalDefaults: Required<BlockStyles> = {
@@ -44,8 +54,14 @@ export function mergeStyles(
   // Level 2: Theme overrides for this block type
   const level2 = theme.blockOverrides[definition.type] ?? {};
 
-  // Level 3: Per-request overrides
-  const level3 = block.styleOverrides ?? {};
+  // Level 3 (split mode only): Split mode overrides
+  const splitOverrides =
+    layoutMode === "split" && theme.splitModeBlockOverrides
+      ? theme.splitModeBlockOverrides[definition.type] ?? {}
+      : {};
+
+  // Final level: Per-request overrides
+  const requestOverrides = block.styleOverrides ?? {};
 
   // Merge: later levels override earlier levels per-property
   const merged: Required<BlockStyles> = { ...globalDefaults };
@@ -57,8 +73,11 @@ export function mergeStyles(
     if (level2[key] !== undefined) {
       (merged as Record<string, unknown>)[key] = level2[key];
     }
-    if (level3[key] !== undefined) {
-      (merged as Record<string, unknown>)[key] = level3[key];
+    if (splitOverrides[key] !== undefined) {
+      (merged as Record<string, unknown>)[key] = splitOverrides[key];
+    }
+    if (requestOverrides[key] !== undefined) {
+      (merged as Record<string, unknown>)[key] = requestOverrides[key];
     }
   }
 

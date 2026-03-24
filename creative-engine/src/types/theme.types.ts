@@ -54,6 +54,12 @@ export interface ThemeDefinition {
     height?: string;
   };
   blockOverrides: ThemeBlockOverrides;
+  /**
+   * Block style overrides specifically for split layout mode.
+   * When in split mode, text is on a solid colored panel, so colors need to invert.
+   * These override blockOverrides when layoutMode is "split".
+   */
+  splitModeBlockOverrides?: ThemeBlockOverrides;
 }
 
 // --- Zod Schemas ---
@@ -107,4 +113,5 @@ export const ThemeDefinitionSchema = z.object({
     height: z.string().optional(),
   }),
   blockOverrides: z.record(z.string(), BlockStylesSchema.partial()),
+  splitModeBlockOverrides: z.record(z.string(), BlockStylesSchema.partial()).optional(),
 });

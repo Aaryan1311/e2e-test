@@ -6,6 +6,7 @@ import type {
   CanvasDefinition,
   ThemeDefinition,
   RenderRequest,
+  LayoutMode,
 } from "../types/index.js";
 
 /** Axis-aligned bounding box in pixel coordinates */
@@ -59,11 +60,50 @@ export interface PositionedBlock extends ResolvedBlock {
   scaledFontSize?: string;
 }
 
+/** Layout-mode-specific configuration resolved from theme + request */
+export interface ResolvedLayoutConfig {
+  mode: LayoutMode;
+
+  /** For split mode */
+  contentPanel?: {
+    side: "left" | "right";
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    backgroundColor: string;
+  };
+  imagePanel?: {
+    side: "left" | "right";
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  infinityBridge?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    color: string;
+    opacity: number;
+    svgPath: string;
+  };
+
+  /** For image-overlay mode */
+  overlay?: OverlayConfig;
+
+  /** Common — where blocks go, regardless of mode */
+  textZone: TextZone;
+}
+
 /** The complete layout result — everything needed to render */
 export interface LayoutResult {
   canvas: CanvasDefinition;
   theme: ThemeDefinition;
   backgroundImage: string;
+  layoutMode: LayoutMode;
+  layoutConfig: ResolvedLayoutConfig;
   textZone: TextZone;
   overlay: OverlayConfig;
   stackedBlocks: PositionedBlock[];

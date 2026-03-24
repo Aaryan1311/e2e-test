@@ -67,10 +67,10 @@ console.log("\n--- Style Merger Tests ---");
   }
 
   // Verify theme override beats block default
-  // everyday theme sets heading color to #1A3B6B
+  // everyday theme sets heading color to #FA1432
   assert(
-    styles.color === "#1A3B6B",
-    `Theme override should win: expected #1A3B6B, got ${styles.color}`
+    styles.color === "#FA1432",
+    `Theme override should win: expected #FA1432, got ${styles.color}`
   );
 
   // Verify request override beats theme override
@@ -83,10 +83,10 @@ console.log("\n--- Style Merger Tests ---");
     `Request override should win: expected #FF0000, got ${overriddenStyles.color}`
   );
 
-  // Verify cascade: fontFamily should come from theme override (everyday sets "Arial Black" for heading)
+  // Verify cascade: fontFamily should come from theme override (everyday sets "Source Sans 3" for heading)
   assert(
-    styles.fontFamily === "Arial Black",
-    `Theme override fontFamily expected "Arial Black", got "${styles.fontFamily}"`
+    styles.fontFamily === "Source Sans 3",
+    `Theme override fontFamily expected "Source Sans 3", got "${styles.fontFamily}"`
   );
 }
 

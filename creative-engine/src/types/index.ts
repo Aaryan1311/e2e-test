@@ -36,5 +36,14 @@ export {
 export type { CanvasDefinition } from "./canvas.types.js";
 export { CanvasDefinitionSchema } from "./canvas.types.js";
 
-export type { RenderRequest, RenderResult } from "./render-request.types.js";
-export { RenderRequestSchema } from "./render-request.types.js";
+export type {
+  RenderRequest,
+  RenderResult,
+  LayoutMode,
+  SplitLayoutConfig,
+} from "./render-request.types.js";
+export {
+  RenderRequestSchema,
+  LayoutModeSchema,
+  SplitLayoutConfigSchema,
+} from "./render-request.types.js";

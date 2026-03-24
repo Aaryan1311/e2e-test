@@ -1,4 +1,4 @@
-import type { BlockInstance, ThemeDefinition } from "../../types/index.js";
+import type { BlockInstance, ThemeDefinition, LayoutMode } from "../../types/index.js";
 import { getBlockDefinition } from "../../config/blocks/registry.js";
 import { mergeStyles } from "./style-merger.js";
 import type { ResolvedBlock } from "../types.js";
@@ -11,11 +11,12 @@ import type { ResolvedBlock } from "../types.js";
  */
 export function sortBlocks(
   blocks: BlockInstance[],
-  theme: ThemeDefinition
+  theme: ThemeDefinition,
+  layoutMode?: LayoutMode
 ): { stacked: ResolvedBlock[]; pinned: ResolvedBlock[] } {
   const resolved: ResolvedBlock[] = blocks.map((block) => {
     const definition = getBlockDefinition(block.type);
-    const resolvedStyles = mergeStyles(block, definition, theme);
+    const resolvedStyles = mergeStyles(block, definition, theme, layoutMode);
 
     return {
       type: block.type,

@@ -283,6 +283,106 @@ console.log("\n--- Pipeline Integration Test ---");
 }
 
 // ============================================================
+// 4. Layout Mode Render Tests
+// ============================================================
+console.log("\n--- Split Mode Render Test ---");
+{
+  const splitRequest: RenderRequest = {
+    accountType: "everyday",
+    aspectRatios: ["1:1"],
+    backgroundImage: "",
+    layoutMode: "split",
+    blocks: [
+      { type: "heading", content: "Get 50% Off on Home Loans" },
+      { type: "subheading", content: "Enabling easy banking" },
+      { type: "cta", content: "Apply Now" },
+      { type: "disclaimer", content: "Terms and conditions apply." },
+    ],
+  };
+
+  const results = await generateCreatives(splitRequest);
+  assert(results.length === 1, `Split render should produce 1 result, got ${results.length}`);
+  assert(results[0]!.imageBuffer.length > 0, "Split image buffer should not be empty");
+
+  const outputDir = resolve(process.cwd(), "test-output");
+  await mkdir(outputDir, { recursive: true });
+  await writeFile(resolve(outputDir, "split-everyday-1x1.png"), results[0]!.imageBuffer);
+  console.log(`  Saved: test-output/split-everyday-1x1.png (${Math.round(results[0]!.imageBuffer.length / 1024)} KB)`);
+}
+
+console.log("\n--- Image-Overlay Mode Render Test ---");
+{
+  const overlayRequest: RenderRequest = {
+    accountType: "everyday",
+    aspectRatios: ["1:1"],
+    backgroundImage: "",
+    layoutMode: "image-overlay",
+    blocks: [
+      { type: "heading", content: "Get 50% Off on Home Loans" },
+      { type: "subheading", content: "Enabling easy banking" },
+      { type: "cta", content: "Apply Now" },
+      { type: "disclaimer", content: "Terms and conditions apply." },
+    ],
+  };
+
+  const results = await generateCreatives(overlayRequest);
+  assert(results.length === 1, `Overlay render should produce 1 result, got ${results.length}`);
+
+  const outputDir = resolve(process.cwd(), "test-output");
+  await writeFile(resolve(outputDir, "overlay-everyday-1x1.png"), results[0]!.imageBuffer);
+  console.log(`  Saved: test-output/overlay-everyday-1x1.png (${Math.round(results[0]!.imageBuffer.length / 1024)} KB)`);
+}
+
+console.log("\n--- Image-Forward Mode Render Test ---");
+{
+  const forwardRequest: RenderRequest = {
+    accountType: "everyday",
+    aspectRatios: ["1:1"],
+    backgroundImage: "",
+    layoutMode: "image-forward",
+    blocks: [
+      { type: "disclaimer", content: "Terms and conditions apply." },
+    ],
+  };
+
+  const results = await generateCreatives(forwardRequest);
+  assert(results.length === 1, `Forward render should produce 1 result, got ${results.length}`);
+
+  const outputDir = resolve(process.cwd(), "test-output");
+  await writeFile(resolve(outputDir, "forward-everyday-1x1.png"), results[0]!.imageBuffer);
+  console.log(`  Saved: test-output/forward-everyday-1x1.png (${Math.round(results[0]!.imageBuffer.length / 1024)} KB)`);
+}
+
+console.log("\n--- Split Mode All Aspect Ratios ---");
+{
+  const allRatios = ["1:1", "9:16", "16:9", "4:5", "3:4", "2:1", "1:2", "728:90", "3:1"];
+  const multiRequest: RenderRequest = {
+    accountType: "everyday",
+    aspectRatios: allRatios,
+    backgroundImage: "",
+    layoutMode: "split",
+    blocks: [
+      { type: "heading", content: "Get 50% Off on Home Loans" },
+      { type: "subheading", content: "Enabling easy banking" },
+      { type: "cta", content: "Apply Now" },
+    ],
+  };
+
+  const results = await generateCreatives(multiRequest);
+  assert(
+    results.length === allRatios.length,
+    `Should render all ${allRatios.length} ratios, got ${results.length}`
+  );
+
+  const outputDir = resolve(process.cwd(), "test-output");
+  for (const result of results) {
+    const filename = `split-everyday-${result.aspectRatio.replace(":", "x")}.png`;
+    await writeFile(resolve(outputDir, filename), result.imageBuffer);
+    console.log(`  Saved: test-output/${filename} (${Math.round(result.imageBuffer.length / 1024)} KB)`);
+  }
+}
+
+// ============================================================
 // Cleanup and Summary
 // ============================================================
 await browserPool.drain();

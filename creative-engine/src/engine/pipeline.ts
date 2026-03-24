@@ -1,13 +1,13 @@
 import { RenderRequestSchema } from "../types/index.js";
-import type { RenderRequest, RenderResult } from "../types/index.js";
+import type { RenderRequest, RenderResult, LayoutMode } from "../types/index.js";
 import { getTheme } from "../config/themes/index.js";
 import { getCanvas } from "../config/canvases.js";
-import { analyzeSpatial } from "./spatial-analyzer/index.js";
+import { resolveLayoutMode } from "./layout-modes/index.js";
 import { resolveLayout } from "./layout-resolver/index.js";
 import { buildHtml } from "./html-builder/index.js";
 import { renderToImage } from "./renderer/index.js";
 import { checkQuality } from "./quality-checker/index.js";
-import type { LayoutResult, QualityCheckResult } from "./types.js";
+import type { LayoutResult, QualityCheckResult, SpatialAnalysisResult } from "./types.js";
 
 const MAX_FIX_ATTEMPTS = 2;
 
@@ -20,29 +20,27 @@ async function attemptAutoFix(
   request: RenderRequest,
   canvas: ReturnType<typeof getCanvas>,
   theme: ReturnType<typeof getTheme>,
-  spatialResult: Awaited<ReturnType<typeof analyzeSpatial>>,
-  qualityResult: QualityCheckResult
+  spatialResult: SpatialAnalysisResult,
+  qualityResult: QualityCheckResult,
+  layoutConfig?: LayoutResult["layoutConfig"]
 ): Promise<LayoutResult> {
-  // Create a modified theme for the fix attempt
   const modifiedTheme = structuredClone(theme);
 
   for (const check of qualityResult.checks) {
     if (check.passed) continue;
 
     if (check.name === "overlap" || check.name === "spacing") {
-      // Increase blockGap by 25%
       const currentGap = parseFloat(modifiedTheme.layout.blockGap) || 16;
       modifiedTheme.layout.blockGap = `${Math.round(currentGap * 1.25)}px`;
     }
 
     if (check.name === "overflow") {
-      // Reduce default text zone width by 10%
       const currentWidth = parseFloat(modifiedTheme.layout.defaultTextZoneWidth) || 55;
       modifiedTheme.layout.defaultTextZoneWidth = `${Math.round(currentWidth * 0.9)}%`;
     }
   }
 
-  return resolveLayout(request, canvas, modifiedTheme, spatialResult);
+  return resolveLayout(request, canvas, modifiedTheme, spatialResult, layoutConfig);
 }
 
 /**
@@ -51,7 +49,7 @@ async function attemptAutoFix(
  * Steps per aspect ratio:
  * 1. Validate request via Zod schema
  * 2. Load theme and canvas configs
- * 3. Run spatial analysis on the background image
+ * 3. Resolve layout mode (split skips spatial analysis, image-overlay uses it)
  * 4. Resolve layout (block positions)
  * 5. Run quality checks (with auto-fix attempts)
  * 6. Build self-contained HTML
@@ -71,10 +69,16 @@ export async function generateCreatives(
     throw new Error(`[Pipeline] Invalid render request: ${parsed.error.message}`);
   }
 
+  // Default layoutMode if not provided (backward compatibility)
+  const layoutMode: LayoutMode = request.layoutMode ?? "split";
+  if (!request.layoutMode) {
+    console.warn("[Pipeline] No layoutMode specified, defaulting to 'split'");
+  }
+
   // Load theme
   const theme = getTheme(request.accountType);
   console.log(
-    `[Pipeline] Starting render for "${request.accountType}" — ${request.aspectRatios.length} aspect ratio(s)`
+    `[Pipeline] Starting render for "${request.accountType}" mode="${layoutMode}" — ${request.aspectRatios.length} aspect ratio(s)`
   );
 
   // Process each aspect ratio concurrently
@@ -83,21 +87,30 @@ export async function generateCreatives(
       // Load canvas
       const canvas = getCanvas(aspectRatio);
 
-      // Spatial analysis
-      const spatialStart = performance.now();
-      const spatialResult = await analyzeSpatial(
-        request.backgroundImage,
-        canvas,
-        theme,
-        request.subjectPosition
-      );
+      // Resolve layout mode configuration
+      const modeStart = performance.now();
+      const layoutConfig = await resolveLayoutMode(request, canvas, theme);
       console.log(
-        `[Pipeline] Spatial analysis complete for ${aspectRatio} (${Math.round(performance.now() - spatialStart)}ms)`
+        `[Pipeline] Layout mode "${layoutMode}" resolved for ${aspectRatio} (${Math.round(performance.now() - modeStart)}ms)`
       );
+
+      // Create a minimal SpatialAnalysisResult for the layout resolver
+      const spatialResult: SpatialAnalysisResult = {
+        subjectBounds: null,
+        textZone: layoutConfig.textZone,
+        overlay: layoutConfig.overlay ?? {
+          type: "none",
+          css: "",
+          opacity: 0,
+        },
+        confidence: layoutMode === "split" || layoutMode === "image-forward" ? 1.0 : 0.5,
+      };
 
       // Layout resolution
       const layoutStart = performance.now();
-      let layoutResult = await resolveLayout(request, canvas, theme, spatialResult);
+      let layoutResult = await resolveLayout(
+        request, canvas, theme, spatialResult, layoutConfig
+      );
       console.log(
         `[Pipeline] Layout resolved for ${aspectRatio} (${Math.round(performance.now() - layoutStart)}ms)`
       );
@@ -110,7 +123,6 @@ export async function generateCreatives(
 
       if (!qualityResult.passed) {
         for (let attempt = 0; attempt < MAX_FIX_ATTEMPTS; attempt++) {
-          // Check if it's a hard fail (font-size) that can't be auto-fixed
           const hasFontSizeError = qualityResult.checks.some(
             (c) => c.name === "font-size" && !c.passed
           );
@@ -121,7 +133,7 @@ export async function generateCreatives(
 
           console.log(`[Quality] Attempting auto-fix #${attempt + 1} for ${aspectRatio}`);
           layoutResult = await attemptAutoFix(
-            request, canvas, theme, spatialResult, qualityResult
+            request, canvas, theme, spatialResult, qualityResult, layoutConfig
           );
           qualityResult = checkQuality(layoutResult);
           console.log(
@@ -165,7 +177,7 @@ export async function generateCreatives(
         height: canvas.height,
         imageBuffer,
         metadata: {
-          textZone: spatialResult.textZone,
+          textZone: layoutConfig.textZone,
           blocksRendered: [
             ...layoutResult.stackedBlocks.map((b) => b.type),
             ...layoutResult.pinnedBlocks.map((b) => b.type),
