@@ -1,6 +1,8 @@
 import { getAllBlockDefinitions, isRegisteredBlock } from "./config/blocks/registry.js";
 import { getAllThemes } from "./config/themes/index.js";
 import { getAllCanvases } from "./config/canvases.js";
+import { analyzeSpatial } from "./engine/spatial-analyzer/index.js";
+import { resolveLayout } from "./engine/layout-resolver/index.js";
 
 function main(): void {
   // Load all configs — these throw on validation failure
@@ -23,8 +25,12 @@ function main(): void {
     }
   }
 
+  // Verify engine modules load without errors
+  console.log("Spatial Analyzer module: loaded");
+  console.log("Layout Resolver module: loaded");
+
   console.log("All theme block overrides reference valid block types.");
-  console.log("Configuration is healthy. Ready for Phase 2.");
+  console.log("Configuration is healthy. Engine modules ready.");
 }
 
 main();
