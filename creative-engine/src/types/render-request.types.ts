@@ -17,7 +17,6 @@ export interface SplitLayoutConfig {
 
 export interface RenderRequest {
   accountType: string;
-  aspectRatios: string[];
   backgroundImage: string;
   blocks: BlockInstance[];
   layoutMode?: LayoutMode;
@@ -28,6 +27,10 @@ export interface RenderRequest {
     width: number;
     height: number;
   };
+  /** @deprecated Canvas size is now derived from the background image. Ignored if provided. */
+  aspectRatios?: string[];
+  /** Whether to include the theme logo. Default: true. Set false to skip. */
+  includeLogo?: boolean;
 }
 
 export interface RenderResult {
@@ -58,7 +61,6 @@ export const SplitLayoutConfigSchema = z.object({
 
 export const RenderRequestSchema = z.object({
   accountType: z.string().min(1),
-  aspectRatios: z.array(z.string().regex(/^\d+:\d+$/)).min(1),
   backgroundImage: z.string(),
   blocks: z.array(BlockInstanceSchema).min(1),
   layoutMode: LayoutModeSchema.optional(),
@@ -71,4 +73,7 @@ export const RenderRequestSchema = z.object({
       height: z.number().positive(),
     })
     .optional(),
+  /** @deprecated Ignored — canvas size derived from image */
+  aspectRatios: z.array(z.string().regex(/^\d+:\d+$/)).optional(),
+  includeLogo: z.boolean().optional(),
 });

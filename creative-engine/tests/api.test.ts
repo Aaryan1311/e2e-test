@@ -1,4 +1,5 @@
 import request from "supertest";
+import { resolve } from "node:path";
 import type { CanvasDefinition, ThemeDefinition, BlockInstance } from "../src/types/index.js";
 import { getTheme } from "../src/config/themes/index.js";
 import { getCanvas } from "../src/config/canvases.js";
@@ -31,6 +32,7 @@ function assert(condition: boolean, message: string): void {
 // Helpers
 const theme: ThemeDefinition = getTheme("everyday");
 const canvas: CanvasDefinition = getCanvas("1:1");
+const TEST_IMAGE = resolve(process.cwd(), "test-assets", "test-image-travel.png");
 
 function makePositionedBlock(
   type: string,
@@ -114,7 +116,6 @@ console.log("\n--- Quality Checker: Overflow ---");
 
 console.log("\n--- Quality Checker: Font Size ---");
 {
-  // Block with 6px heading font (below 10px minimum for non-disclaimer)
   const tinyBlock = makePositionedBlock("heading", 10, 10, 200, 50, {
     resolvedStyles: {
       ...makePositionedBlock("heading", 0, 0, 0, 0).resolvedStyles,
@@ -125,7 +126,6 @@ console.log("\n--- Quality Checker: Font Size ---");
   assert(!result.passed, "Font size checker should catch 6px heading");
   assert(result.severity === "error", "Font size should be error severity");
 
-  // 6px disclaimer is OK
   const disclaimerBlock = makePositionedBlock("disclaimer", 0, 1040, 1080, 40, {
     resolvedStyles: {
       ...makePositionedBlock("disclaimer", 0, 0, 0, 0).resolvedStyles,
@@ -138,9 +138,8 @@ console.log("\n--- Quality Checker: Font Size ---");
 
 console.log("\n--- Quality Checker: Spacing ---");
 {
-  // 2px gap between blocks
   const a = makePositionedBlock("heading", 10, 10, 200, 50);
-  const b = makePositionedBlock("subheading", 10, 62, 200, 50); // gap = 62 - 60 = 2px
+  const b = makePositionedBlock("subheading", 10, 62, 200, 50);
   const result = checkSpacing([a, b], theme);
   assert(!result.passed, "Spacing checker should warn about 2px gap");
   assert(result.severity === "warning", "Spacing should be warning severity");
@@ -148,7 +147,6 @@ console.log("\n--- Quality Checker: Spacing ---");
 
 console.log("\n--- Quality Checker: Contrast ---");
 {
-  // White text on estimated white/bright background
   const whiteBlock = makePositionedBlock("heading", 10, 10, 200, 50, {
     resolvedStyles: {
       ...makePositionedBlock("heading", 0, 0, 0, 0).resolvedStyles,
@@ -161,7 +159,6 @@ console.log("\n--- Quality Checker: Contrast ---");
     css: "rgba(255,255,255,0.9)",
     opacity: 0.9,
   };
-  // With a bright primary color theme, white text might have low contrast
   const brightTheme = { ...theme, colors: { ...theme.colors, primary: "#FFFFFF" } } as ThemeDefinition;
   const result = checkContrast([whiteBlock], brightOverlay, brightTheme);
   assert(!result.passed, "White text on white background should warn about contrast");
@@ -175,7 +172,6 @@ console.log("\n--- Quality Checker: Valid Layout ---");
   assert(result.score > 0, `Quality score should be > 0, got ${result.score}`);
   assert(result.checks.length === 5, `Should have 5 checks, got ${result.checks.length}`);
 
-  // For a valid layout, all error-severity checks should pass
   const errorChecks = result.checks.filter((c) => c.severity === "error");
   const errorsPassed = errorChecks.every((c) => c.passed);
   assert(errorsPassed, "All error-severity checks should pass for valid layout");
@@ -235,7 +231,7 @@ const app = createServer();
   // POST /render with empty blocks → 400
   const emptyBlocksRes = await request(app)
     .post("/render")
-    .send({ accountType: "everyday", aspectRatios: ["1:1"], backgroundImage: "", blocks: [] });
+    .send({ accountType: "everyday", backgroundImage: TEST_IMAGE, blocks: [] });
   assert(emptyBlocksRes.status === 400, `Empty blocks should be 400, got ${emptyBlocksRes.status}`);
 
   // POST /preview returns HTML
@@ -243,21 +239,19 @@ const app = createServer();
     .post("/preview")
     .send({
       accountType: "everyday",
-      aspectRatios: ["1:1"],
-      backgroundImage: "",
+      backgroundImage: TEST_IMAGE,
       blocks: [{ type: "heading", content: "Preview Test" }],
     });
   assert(previewRes.status === 200, `POST /preview should be 200, got ${previewRes.status}`);
   assert(previewRes.body.data.html.includes("<!DOCTYPE html>"), "Preview should return HTML");
   assert(previewRes.body.data.qualityCheck !== undefined, "Preview should include quality check");
 
-  // POST /render with valid request
+  // POST /render with valid request — singular render response
   const renderRes = await request(app)
     .post("/render")
     .send({
       accountType: "everyday",
-      aspectRatios: ["1:1"],
-      backgroundImage: "",
+      backgroundImage: TEST_IMAGE,
       blocks: [
         { type: "heading", content: "Test Render" },
         { type: "cta", content: "Go" },
@@ -265,10 +259,11 @@ const app = createServer();
     })
     .timeout(30000);
   assert(renderRes.status === 200, `POST /render should be 200, got ${renderRes.status}`);
-  assert(renderRes.body.data.renders.length === 1, "Should have 1 render result");
-  assert(renderRes.body.data.summary.succeeded === 1, "Should have 1 succeeded");
+  assert(renderRes.body.data.render !== undefined, "Should have render (singular) in response");
+  assert(renderRes.body.data.render.width === 1920, `Width should be 1920 (from test image), got ${renderRes.body.data.render.width}`);
+  assert(renderRes.body.data.render.height === 1280, `Height should be 1280 (from test image), got ${renderRes.body.data.render.height}`);
   assert(
-    renderRes.body.data.renders[0].imageBase64.length > 0,
+    renderRes.body.data.render.imageBase64.length > 0,
     "Should have non-empty base64 image"
   );
 }
@@ -276,9 +271,6 @@ const app = createServer();
 // Rate limiter test
 console.log("\n--- Rate Limiter Test ---");
 {
-  // We set rate limit to 30/min in the default config.
-  // Since we already made several requests above, let's just verify
-  // the rate limiter header mechanism works by checking response headers exist.
   const res = await request(app).get("/health");
   assert(res.status === 200, "Health check should still work within rate limit");
 }

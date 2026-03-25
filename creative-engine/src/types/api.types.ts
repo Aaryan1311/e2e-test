@@ -16,13 +16,13 @@ export interface ApiResponse<T = unknown> {
   };
 }
 
-/** Response for render endpoint */
+/** Response for render endpoint (singular) */
 export interface RenderApiResponse {
-  renders: Array<{
-    aspectRatio: string;
-    canvasId: string;
+  render: {
     width: number;
     height: number;
+    aspectRatio: string;
+    canvasId: string;
     imageUrl?: string;
     imageBase64?: string;
     quality: {
@@ -31,13 +31,8 @@ export interface RenderApiResponse {
       checks: Record<string, boolean>;
       warnings: string[];
     };
-  }>;
-  summary: {
-    total: number;
-    succeeded: number;
-    failed: number;
-    totalDuration: number;
   };
+  duration: number;
 }
 
 /** Response for block list config endpoint */

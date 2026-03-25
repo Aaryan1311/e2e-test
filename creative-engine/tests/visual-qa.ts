@@ -1,42 +1,42 @@
 /**
- * Visual QA Script
+ * Visual QA Script — Phase 6 (Simplified Flow)
  *
- * Generates multiple creatives using a real production image across
- * different layout modes, block combinations, and aspect ratios.
+ * One image in → one image out. The image IS the canvas.
+ * Generates creatives using the singular generateCreative pipeline.
  *
  * Output goes to test-output/visual-qa/ for human inspection.
  */
-import { writeFile, mkdir } from "node:fs/promises";
+import { writeFile, mkdir, copyFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import sharp from "sharp";
 import type { RenderRequest } from "../src/types/index.js";
-import { generateCreatives } from "../src/engine/pipeline.js";
+import { generateCreative } from "../src/engine/pipeline.js";
 import { browserPool } from "../src/engine/renderer/browser-pool.js";
 
 const IMAGE_PATH = "./test-assets/test-image-travel.png";
 const OUTPUT_BASE = resolve(process.cwd(), "test-output", "visual-qa");
+const OUTPUTS_DIR = "/mnt/user-data/outputs";
 
 interface TestCase {
   id: string;
   name: string;
-  subdir: string;
+  outputName: string;
   request: RenderRequest;
 }
 
 // ============================================================
-// Test Definitions
+// Test Definitions — One image in, one image out
 // ============================================================
 
 const testCases: TestCase[] = [
-  // --- Test Set 1: Split Mode — Everyday Theme ---
+  // Test 1: Split mode — heading + subheading only
   {
-    id: "1a",
-    name: "Split: Heading + Subheading (minimal)",
-    subdir: "split",
+    id: "test1",
+    name: "Split: heading + subheading (minimal)",
+    outputName: "test1-split-minimal.png",
     request: {
       accountType: "everyday",
       layoutMode: "split",
-      aspectRatios: ["1:1", "16:9", "9:16"],
       backgroundImage: IMAGE_PATH,
       blocks: [
         { type: "heading", content: "Your journey to financial freedom" },
@@ -44,14 +44,32 @@ const testCases: TestCase[] = [
       ],
     },
   },
+
+  // Test 2: Split mode — heading + subheading + CTA
   {
-    id: "1b",
-    name: "Split: Content-heavy (bullets + CTA + disclaimer)",
-    subdir: "split",
+    id: "test2",
+    name: "Split: heading + subheading + CTA",
+    outputName: "test2-split-cta.png",
     request: {
       accountType: "everyday",
       layoutMode: "split",
-      aspectRatios: ["1:1", "16:9", "9:16"],
+      backgroundImage: IMAGE_PATH,
+      blocks: [
+        { type: "heading", content: "Travel Savings Account" },
+        { type: "subheading", content: "for the explorer in you" },
+        { type: "cta", content: "Open Account Now" },
+      ],
+    },
+  },
+
+  // Test 3: Split mode — heading + subheading + bullets + CTA + disclaimer
+  {
+    id: "test3",
+    name: "Split: content-heavy (bullets + CTA + disclaimer)",
+    outputName: "test3-split-heavy.png",
+    request: {
+      accountType: "everyday",
+      layoutMode: "split",
       backgroundImage: IMAGE_PATH,
       blocks: [
         { type: "heading", content: "Travel Savings Account" },
@@ -75,67 +93,15 @@ const testCases: TestCase[] = [
       ],
     },
   },
-  {
-    id: "1c",
-    name: "Split: Maximum blocks",
-    subdir: "split",
-    request: {
-      accountType: "everyday",
-      layoutMode: "split",
-      aspectRatios: ["1:1", "16:9", "9:16"],
-      backgroundImage: IMAGE_PATH,
-      blocks: [
-        { type: "heading", content: "Explore the World" },
-        { type: "subheading", content: "with Kotak Travel Card" },
-        {
-          type: "offer-line",
-          content: "Limited offer: Zero annual fee for first year",
-        },
-        {
-          type: "solution-line",
-          content:
-            "Load multiple currencies. Spend anywhere. Track everything from your phone.",
-        },
-        { type: "cta", content: "Apply Now" },
-        {
-          type: "contact-line",
-          content: "Call 1800 266 2666 | Visit www.kotak.com",
-        },
-        {
-          type: "disclaimer",
-          content:
-            "Kotak Mahindra Bank Ltd. | CIN: L65110MH1985PLC038137. Registered Office: 27 BKC, C27, G Block, Bandra Kurla Complex, Bandra (E), Mumbai - 400 051. www.kotak.com | T&C Apply",
-        },
-      ],
-    },
-  },
-  {
-    id: "1d",
-    name: "Split: Content panel on RIGHT",
-    subdir: "split",
-    request: {
-      accountType: "everyday",
-      layoutMode: "split",
-      splitConfig: { contentPanelSide: "right", contentPanelRatio: 0.5 },
-      aspectRatios: ["1:1", "16:9"],
-      backgroundImage: IMAGE_PATH,
-      blocks: [
-        { type: "heading", content: "Save More Travel More" },
-        { type: "subheading", content: "with Kotak Everyday Account" },
-        { type: "cta", content: "Get Started" },
-      ],
-    },
-  },
 
-  // --- Test Set 2: Image-Overlay Mode ---
+  // Test 4: Image-overlay — heading + subheading + CTA (with subject position)
   {
-    id: "2a",
-    name: "Overlay: With subject position",
-    subdir: "overlay",
+    id: "test4",
+    name: "Overlay: with subject position",
+    outputName: "test4-overlay-subject.png",
     request: {
       accountType: "everyday",
       layoutMode: "image-overlay",
-      aspectRatios: ["1:1", "16:9", "9:16"],
       backgroundImage: IMAGE_PATH,
       subjectPosition: { x: 850, y: 100, width: 400, height: 600 },
       blocks: [
@@ -145,128 +111,55 @@ const testCases: TestCase[] = [
       ],
     },
   },
+
+  // Test 5: Image-overlay — without subject position (heuristic)
   {
-    id: "2b",
-    name: "Overlay: Heuristic subject detection",
-    subdir: "overlay",
+    id: "test5",
+    name: "Overlay: heuristic subject detection",
+    outputName: "test5-overlay-heuristic.png",
     request: {
       accountType: "everyday",
       layoutMode: "image-overlay",
-      aspectRatios: ["1:1", "16:9"],
       backgroundImage: IMAGE_PATH,
       blocks: [
         { type: "heading", content: "Adventure Awaits" },
         { type: "subheading", content: "and so does smart banking" },
-        { type: "cta", content: "Learn More" },
       ],
     },
   },
 
-  // --- Test Set 3: Image-Forward Mode ---
+  // Test 6: Split mode with includeLogo: false
   {
-    id: "3a",
-    name: "Forward: Logo + disclaimer only",
-    subdir: "forward",
+    id: "test6",
+    name: "Split: no logo",
+    outputName: "test6-split-nologo.png",
     request: {
       accountType: "everyday",
-      layoutMode: "image-forward",
-      aspectRatios: ["1:1", "4:5"],
+      layoutMode: "split",
       backgroundImage: IMAGE_PATH,
+      includeLogo: false,
       blocks: [
-        {
-          type: "disclaimer",
-          content: "Kotak Mahindra Bank Ltd. | T&C Apply",
-        },
+        { type: "heading", content: "Save More Travel More" },
+        { type: "subheading", content: "with Kotak Everyday Account" },
+        { type: "cta", content: "Get Started" },
       ],
     },
   },
 
-  // --- Test Set 4: Cross-Theme Comparison ---
+  // Test 7: Split mode with content panel on right
   {
-    id: "everyday",
-    name: "Theme: Everyday",
-    subdir: "themes",
+    id: "test7",
+    name: "Split: content panel RIGHT",
+    outputName: "test7-split-right.png",
     request: {
       accountType: "everyday",
       layoutMode: "split",
-      aspectRatios: ["1:1"],
+      splitConfig: { contentPanelSide: "right", contentPanelRatio: 0.5 },
       backgroundImage: IMAGE_PATH,
       blocks: [
-        { type: "heading", content: "Your journey to financial freedom" },
-        { type: "subheading", content: "starts with the right savings plan" },
-      ],
-    },
-  },
-  {
-    id: "solitaire",
-    name: "Theme: Solitaire",
-    subdir: "themes",
-    request: {
-      accountType: "solitaire",
-      layoutMode: "split",
-      aspectRatios: ["1:1"],
-      backgroundImage: IMAGE_PATH,
-      blocks: [
-        { type: "heading", content: "Your journey to financial freedom" },
-        { type: "subheading", content: "starts with the right savings plan" },
-      ],
-    },
-  },
-  {
-    id: "privy",
-    name: "Theme: Privy League",
-    subdir: "themes",
-    request: {
-      accountType: "privy",
-      layoutMode: "split",
-      aspectRatios: ["1:1"],
-      backgroundImage: IMAGE_PATH,
-      blocks: [
-        { type: "heading", content: "Your journey to financial freedom" },
-        { type: "subheading", content: "starts with the right savings plan" },
-      ],
-    },
-  },
-
-  // --- Test Set 5: All 9 Aspect Ratios ---
-  {
-    id: "all-ratios",
-    name: "All 9 ratios: Content-heavy split",
-    subdir: "ratios",
-    request: {
-      accountType: "everyday",
-      layoutMode: "split",
-      aspectRatios: [
-        "1:1",
-        "9:16",
-        "16:9",
-        "4:5",
-        "3:4",
-        "2:1",
-        "1:2",
-        "728:90",
-        "3:1",
-      ],
-      backgroundImage: IMAGE_PATH,
-      blocks: [
-        { type: "heading", content: "Travel Savings Account" },
-        { type: "subheading", content: "for the explorer in you" },
-        {
-          type: "bullets",
-          content: "",
-          items: [
-            "Zero forex markup on international spends",
-            "Complimentary travel insurance up to ₹50 Lakhs",
-            "Airport lounge access worldwide",
-            "24/7 travel assistance helpline",
-          ],
-        },
-        { type: "cta", content: "Open Account Now" },
-        {
-          type: "disclaimer",
-          content:
-            "Kotak Mahindra Bank Ltd. | CIN: L65110MH1985PLC038137. Terms and conditions apply.",
-        },
+        { type: "heading", content: "Save More Travel More" },
+        { type: "subheading", content: "with Kotak Everyday Account" },
+        { type: "cta", content: "Get Started" },
       ],
     },
   },
@@ -279,7 +172,8 @@ const testCases: TestCase[] = [
 interface RenderSummary {
   testId: string;
   testName: string;
-  aspectRatio: string;
+  width: number;
+  height: number;
   qualityScore: number;
   warnings: string[];
   filePath: string;
@@ -301,124 +195,89 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  await mkdir(OUTPUT_BASE, { recursive: true });
+
   const summaries: RenderSummary[] = [];
-  let totalRenders = 0;
   let successCount = 0;
   let failCount = 0;
 
   for (const test of testCases) {
-    const outputDir = resolve(OUTPUT_BASE, test.subdir);
-    await mkdir(outputDir, { recursive: true });
-
     console.log(`\n${"═".repeat(60)}`);
-    console.log(`Test ${test.id}: ${test.name}`);
+    console.log(`${test.id}: ${test.name}`);
     console.log(`Mode: ${test.request.layoutMode ?? "split"}`);
-    console.log(`Aspect ratios: ${test.request.aspectRatios.join(", ")}`);
     console.log(`${"═".repeat(60)}`);
 
     const start = performance.now();
 
     try {
-      const results = await generateCreatives(test.request);
+      const result = await generateCreative(test.request);
       const elapsed = Math.round(performance.now() - start);
 
-      for (const result of results) {
-        totalRenders++;
-        const ratioSlug = result.aspectRatio.replace(":", "x");
-        const filename = `${test.id}-${ratioSlug}.png`;
-        const filePath = resolve(outputDir, filename);
+      const filePath = resolve(OUTPUT_BASE, test.outputName);
+      await writeFile(filePath, result.imageBuffer);
+      const fileSizeKb = Math.round(result.imageBuffer.length / 1024);
 
-        await writeFile(filePath, result.imageBuffer);
-        const fileSizeKb = Math.round(result.imageBuffer.length / 1024);
+      const qualityChecks = result.metadata.qualityChecks ?? {};
+      const failedChecks = Object.entries(qualityChecks)
+        .filter(([, passed]) => !passed)
+        .map(([name]) => name);
 
-        const qualityChecks = result.metadata.qualityChecks ?? {};
-        const failedChecks = Object.entries(qualityChecks)
-          .filter(([, passed]) => !passed)
-          .map(([name]) => name);
+      const errorChecks = failedChecks.filter(
+        (n) => n === "overlap" || n === "overflow" || n === "font-size"
+      );
+      const warningChecks = failedChecks.filter(
+        (n) => n === "contrast" || n === "spacing"
+      );
+      const score = Math.max(
+        0,
+        100 - errorChecks.length * 30 - warningChecks.length * 10
+      );
 
-        // Estimate score from checks
-        const errorChecks = failedChecks.filter(
-          (n) => n === "overlap" || n === "overflow" || n === "font-size"
-        );
-        const warningChecks = failedChecks.filter(
-          (n) => n === "contrast" || n === "spacing"
-        );
-        const score = Math.max(
-          0,
-          100 - errorChecks.length * 30 - warningChecks.length * 10
-        );
+      const warnings = failedChecks.map(
+        (c) => `${test.id}: quality check "${c}" failed`
+      );
 
-        const warnings = failedChecks.map(
-          (c) => `${test.id}/${result.aspectRatio}: quality check "${c}" failed`
-        );
-
-        console.log(
-          `  ✓ ${ratioSlug}: ${result.width}x${result.height} | ` +
-            `quality=${score} | ${fileSizeKb}KB | ${filename}`
-        );
-        if (warnings.length > 0) {
-          for (const w of warnings)
-            console.log(`    ⚠ ${w}`);
-        }
-
-        summaries.push({
-          testId: test.id,
-          testName: test.name,
-          aspectRatio: result.aspectRatio,
-          qualityScore: score,
-          warnings,
-          filePath,
-          fileSize: result.imageBuffer.length,
-          renderTimeMs: elapsed,
-          success: true,
-        });
-
-        successCount++;
+      console.log(
+        `  ✓ ${result.width}x${result.height} | ` +
+          `quality=${score} | ${fileSizeKb}KB | ${test.outputName} | ${elapsed}ms`
+      );
+      if (warnings.length > 0) {
+        for (const w of warnings) console.log(`    ⚠ ${w}`);
       }
 
-      // Check for missing ratios
-      const renderedRatios = new Set(results.map((r) => r.aspectRatio));
-      for (const ratio of test.request.aspectRatios) {
-        if (!renderedRatios.has(ratio)) {
-          totalRenders++;
-          failCount++;
-          console.log(`  ✗ ${ratio}: FAILED (no output)`);
-          summaries.push({
-            testId: test.id,
-            testName: test.name,
-            aspectRatio: ratio,
-            qualityScore: 0,
-            warnings: [],
-            filePath: "",
-            fileSize: 0,
-            renderTimeMs: 0,
-            success: false,
-            error: "No output produced",
-          });
-        }
-      }
+      summaries.push({
+        testId: test.id,
+        testName: test.name,
+        width: result.width,
+        height: result.height,
+        qualityScore: score,
+        warnings,
+        filePath,
+        fileSize: result.imageBuffer.length,
+        renderTimeMs: elapsed,
+        success: true,
+      });
+
+      successCount++;
     } catch (err) {
       const elapsed = Math.round(performance.now() - start);
-      const errorMsg =
-        err instanceof Error ? err.message : String(err);
+      const errorMsg = err instanceof Error ? err.message : String(err);
       console.error(`  ✗ FAILED (${elapsed}ms): ${errorMsg}`);
 
-      for (const ratio of test.request.aspectRatios) {
-        totalRenders++;
-        failCount++;
-        summaries.push({
-          testId: test.id,
-          testName: test.name,
-          aspectRatio: ratio,
-          qualityScore: 0,
-          warnings: [],
-          filePath: "",
-          fileSize: 0,
-          renderTimeMs: elapsed,
-          success: false,
-          error: errorMsg,
-        });
-      }
+      failCount++;
+      summaries.push({
+        testId: test.id,
+        testName: test.name,
+        width: 0,
+        height: 0,
+        qualityScore: 0,
+        warnings: [],
+        filePath: "",
+        fileSize: 0,
+        renderTimeMs: elapsed,
+        success: false,
+        error: errorMsg,
+      });
     }
   }
 
@@ -440,7 +299,7 @@ async function main(): Promise<void> {
   console.log(`\n${"═".repeat(60)}`);
   console.log("Visual QA Summary");
   console.log(`${"═".repeat(60)}`);
-  console.log(`Total renders: ${totalRenders}`);
+  console.log(`Total renders: ${testCases.length}`);
   console.log(`Successful: ${successCount}`);
   console.log(`Failed: ${failCount}`);
   console.log(`Quality scores: min=${minScore}, avg=${avgScore}, max=${maxScore}`);
@@ -454,6 +313,20 @@ async function main(): Promise<void> {
 
   console.log(`\nOutput directory: ${OUTPUT_BASE}/`);
   console.log(`${"═".repeat(60)}`);
+
+  // Copy outputs to /mnt/user-data/outputs/ if it exists
+  try {
+    await mkdir(OUTPUTS_DIR, { recursive: true });
+    for (const summary of summaries) {
+      if (summary.success) {
+        const dest = resolve(OUTPUTS_DIR, `qa-${summary.testId}.png`);
+        await copyFile(summary.filePath, dest);
+      }
+    }
+    console.log(`\nCopied ${successCount} outputs to ${OUTPUTS_DIR}/`);
+  } catch {
+    console.log(`\nSkipped copy to ${OUTPUTS_DIR}/ (not available)`);
+  }
 
   // Cleanup
   await browserPool.drain();

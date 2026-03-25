@@ -10,13 +10,15 @@ import { getTheme } from "../src/config/themes/index.js";
 import { getCanvas } from "../src/config/canvases.js";
 import { buildHtml } from "../src/engine/html-builder/index.js";
 import { BrowserPool } from "../src/engine/renderer/browser-pool.js";
-import { generateCreatives } from "../src/engine/pipeline.js";
+import { generateCreative } from "../src/engine/pipeline.js";
 import { browserPool } from "../src/engine/renderer/browser-pool.js";
 import { sortBlocks } from "../src/engine/layout-resolver/block-sorter.js";
 import { allocateSpace } from "../src/engine/layout-resolver/space-allocator.js";
 import { calculatePositions } from "../src/engine/layout-resolver/position-calculator.js";
 import { calculateTextZone } from "../src/engine/spatial-analyzer/text-zone-calculator.js";
 import type { LayoutResult, SpatialAnalysisResult } from "../src/engine/types.js";
+
+const TEST_IMAGE = resolve(process.cwd(), "test-assets", "test-image-travel.png");
 
 let passed = 0;
 let failed = 0;
@@ -156,11 +158,25 @@ console.log("\n--- HTML Builder Tests ---");
   const layout = createMockLayoutResult();
   layout.overlay = { type: "none", css: "", opacity: 0 };
   const html = await buildHtml(layout);
-  // "none" overlay should NOT produce a z-index: 2 div
   const overlayDivs = (html.match(/z-index:\s*2[^0-9]/g) || []).length;
   assert(
     overlayDivs === 0,
     `"none" overlay should not produce overlay div, found ${overlayDivs}`
+  );
+}
+
+// Test includeLogo=false
+console.log("\n--- HTML Builder: includeLogo=false ---");
+{
+  const layout = createMockLayoutResult();
+  const htmlWithLogo = await buildHtml(layout, true);
+  const htmlNoLogo = await buildHtml(layout, false);
+
+  // Logo file doesn't exist so both should be the same, but let's verify the
+  // code path doesn't error
+  assert(
+    htmlNoLogo.includes("<!DOCTYPE html>"),
+    "includeLogo=false should still produce valid HTML"
   );
 }
 
@@ -172,14 +188,12 @@ console.log("\n--- Browser Pool Tests ---");
 {
   const pool = new BrowserPool({ maxInstances: 3, idleTimeoutMs: 5000 });
 
-  // Pool creates browsers on demand
   const browser1 = await pool.acquire();
   assert(browser1.connected, "Acquired browser should be connected");
   const stats1 = pool.getStats();
   assert(stats1.total === 1, `Pool should have 1 browser, has ${stats1.total}`);
   assert(stats1.inUse === 1, `Pool should have 1 in-use, has ${stats1.inUse}`);
 
-  // Pool reuses released browsers
   await pool.release(browser1);
   const browser2 = await pool.acquire();
   assert(
@@ -188,7 +202,6 @@ console.log("\n--- Browser Pool Tests ---");
   );
   await pool.release(browser2);
 
-  // Pool respects maxInstances
   const b1 = await pool.acquire();
   const b2 = await pool.acquire();
   const b3 = await pool.acquire();
@@ -207,22 +220,21 @@ console.log("\n--- Browser Pool Tests ---");
   await pool.release(b2);
   await pool.release(b3);
 
-  // drain() closes all browsers
   await pool.drain();
   const stats3 = pool.getStats();
   assert(stats3.total === 0, `After drain, pool should have 0 browsers, has ${stats3.total}`);
 }
 
 // ============================================================
-// 3. Pipeline Integration Test
+// 3. Pipeline Integration Test (singular generateCreative)
 // ============================================================
-console.log("\n--- Pipeline Integration Test ---");
+console.log("\n--- Pipeline Integration Test (singular) ---");
 
 {
   const testRequest: RenderRequest = {
     accountType: "everyday",
-    aspectRatios: ["1:1", "16:9"],
-    backgroundImage: "",
+    backgroundImage: TEST_IMAGE,
+    layoutMode: "split",
     blocks: [
       { type: "heading", content: "Get 50% Off on Home Loans" },
       { type: "subheading", content: "Enabling easy banking for everyone" },
@@ -231,55 +243,55 @@ console.log("\n--- Pipeline Integration Test ---");
     ],
   };
 
-  const results = await generateCreatives(testRequest);
+  const result = await generateCreative(testRequest);
 
-  // Correct number of results
+  // Non-empty image buffer
   assert(
-    results.length === 2,
-    `Expected 2 render results, got ${results.length}`
+    result.imageBuffer.length > 0,
+    `Image buffer should not be empty`
   );
 
-  // Save for visual inspection
+  // Dimensions should match the test image (1920x1280)
+  assert(
+    result.width === 1920,
+    `Width should be 1920, got ${result.width}`
+  );
+  assert(
+    result.height === 1280,
+    `Height should be 1280, got ${result.height}`
+  );
+
+  // Valid metadata
+  assert(
+    result.metadata.textZone.width > 0,
+    `Text zone width should be > 0`
+  );
+  assert(
+    result.metadata.textZone.height > 0,
+    `Text zone height should be > 0`
+  );
+  assert(
+    result.metadata.blocksRendered.length === 4,
+    `Expected 4 blocks rendered, got ${result.metadata.blocksRendered.length}`
+  );
+
+  // Verify image dimensions match using sharp
+  const imgMetadata = await sharp(result.imageBuffer).metadata();
+  assert(
+    imgMetadata.width === result.width,
+    `Image width: expected ${result.width}, got ${imgMetadata.width}`
+  );
+  assert(
+    imgMetadata.height === result.height,
+    `Image height: expected ${result.height}, got ${imgMetadata.height}`
+  );
+
+  // Save to test-output
   const outputDir = resolve(process.cwd(), "test-output");
   await mkdir(outputDir, { recursive: true });
-
-  for (const result of results) {
-    // Non-empty image buffer
-    assert(
-      result.imageBuffer.length > 0,
-      `Image buffer for ${result.aspectRatio} should not be empty`
-    );
-
-    // Valid metadata
-    assert(
-      result.metadata.textZone.width > 0,
-      `Text zone width for ${result.aspectRatio} should be > 0`
-    );
-    assert(
-      result.metadata.textZone.height > 0,
-      `Text zone height for ${result.aspectRatio} should be > 0`
-    );
-    assert(
-      result.metadata.blocksRendered.length === 4,
-      `Expected 4 blocks rendered for ${result.aspectRatio}, got ${result.metadata.blocksRendered.length}`
-    );
-
-    // Verify image dimensions match canvas using sharp
-    const imgMetadata = await sharp(result.imageBuffer).metadata();
-    assert(
-      imgMetadata.width === result.width,
-      `Image width for ${result.aspectRatio}: expected ${result.width}, got ${imgMetadata.width}`
-    );
-    assert(
-      imgMetadata.height === result.height,
-      `Image height for ${result.aspectRatio}: expected ${result.height}, got ${imgMetadata.height}`
-    );
-
-    // Save to test-output
-    const filename = `render-test-${result.canvasId}.png`;
-    await writeFile(resolve(outputDir, filename), result.imageBuffer);
-    console.log(`  Saved: test-output/${filename} (${Math.round(result.imageBuffer.length / 1024)} KB)`);
-  }
+  const filename = `render-test-${result.canvasId}.png`;
+  await writeFile(resolve(outputDir, filename), result.imageBuffer);
+  console.log(`  Saved: test-output/${filename} (${Math.round(result.imageBuffer.length / 1024)} KB)`);
 }
 
 // ============================================================
@@ -289,8 +301,7 @@ console.log("\n--- Split Mode Render Test ---");
 {
   const splitRequest: RenderRequest = {
     accountType: "everyday",
-    aspectRatios: ["1:1"],
-    backgroundImage: "",
+    backgroundImage: TEST_IMAGE,
     layoutMode: "split",
     blocks: [
       { type: "heading", content: "Get 50% Off on Home Loans" },
@@ -300,22 +311,20 @@ console.log("\n--- Split Mode Render Test ---");
     ],
   };
 
-  const results = await generateCreatives(splitRequest);
-  assert(results.length === 1, `Split render should produce 1 result, got ${results.length}`);
-  assert(results[0]!.imageBuffer.length > 0, "Split image buffer should not be empty");
+  const result = await generateCreative(splitRequest);
+  assert(result.imageBuffer.length > 0, "Split image buffer should not be empty");
 
   const outputDir = resolve(process.cwd(), "test-output");
   await mkdir(outputDir, { recursive: true });
-  await writeFile(resolve(outputDir, "split-everyday-1x1.png"), results[0]!.imageBuffer);
-  console.log(`  Saved: test-output/split-everyday-1x1.png (${Math.round(results[0]!.imageBuffer.length / 1024)} KB)`);
+  await writeFile(resolve(outputDir, "split-everyday.png"), result.imageBuffer);
+  console.log(`  Saved: test-output/split-everyday.png (${Math.round(result.imageBuffer.length / 1024)} KB)`);
 }
 
 console.log("\n--- Image-Overlay Mode Render Test ---");
 {
   const overlayRequest: RenderRequest = {
     accountType: "everyday",
-    aspectRatios: ["1:1"],
-    backgroundImage: "",
+    backgroundImage: TEST_IMAGE,
     layoutMode: "image-overlay",
     blocks: [
       { type: "heading", content: "Get 50% Off on Home Loans" },
@@ -325,61 +334,31 @@ console.log("\n--- Image-Overlay Mode Render Test ---");
     ],
   };
 
-  const results = await generateCreatives(overlayRequest);
-  assert(results.length === 1, `Overlay render should produce 1 result, got ${results.length}`);
+  const result = await generateCreative(overlayRequest);
+  assert(result.imageBuffer.length > 0, "Overlay image buffer should not be empty");
 
   const outputDir = resolve(process.cwd(), "test-output");
-  await writeFile(resolve(outputDir, "overlay-everyday-1x1.png"), results[0]!.imageBuffer);
-  console.log(`  Saved: test-output/overlay-everyday-1x1.png (${Math.round(results[0]!.imageBuffer.length / 1024)} KB)`);
+  await writeFile(resolve(outputDir, "overlay-everyday.png"), result.imageBuffer);
+  console.log(`  Saved: test-output/overlay-everyday.png (${Math.round(result.imageBuffer.length / 1024)} KB)`);
 }
 
 console.log("\n--- Image-Forward Mode Render Test ---");
 {
   const forwardRequest: RenderRequest = {
     accountType: "everyday",
-    aspectRatios: ["1:1"],
-    backgroundImage: "",
+    backgroundImage: TEST_IMAGE,
     layoutMode: "image-forward",
     blocks: [
       { type: "disclaimer", content: "Terms and conditions apply." },
     ],
   };
 
-  const results = await generateCreatives(forwardRequest);
-  assert(results.length === 1, `Forward render should produce 1 result, got ${results.length}`);
+  const result = await generateCreative(forwardRequest);
+  assert(result.imageBuffer.length > 0, "Forward image buffer should not be empty");
 
   const outputDir = resolve(process.cwd(), "test-output");
-  await writeFile(resolve(outputDir, "forward-everyday-1x1.png"), results[0]!.imageBuffer);
-  console.log(`  Saved: test-output/forward-everyday-1x1.png (${Math.round(results[0]!.imageBuffer.length / 1024)} KB)`);
-}
-
-console.log("\n--- Split Mode All Aspect Ratios ---");
-{
-  const allRatios = ["1:1", "9:16", "16:9", "4:5", "3:4", "2:1", "1:2", "728:90", "3:1"];
-  const multiRequest: RenderRequest = {
-    accountType: "everyday",
-    aspectRatios: allRatios,
-    backgroundImage: "",
-    layoutMode: "split",
-    blocks: [
-      { type: "heading", content: "Get 50% Off on Home Loans" },
-      { type: "subheading", content: "Enabling easy banking" },
-      { type: "cta", content: "Apply Now" },
-    ],
-  };
-
-  const results = await generateCreatives(multiRequest);
-  assert(
-    results.length === allRatios.length,
-    `Should render all ${allRatios.length} ratios, got ${results.length}`
-  );
-
-  const outputDir = resolve(process.cwd(), "test-output");
-  for (const result of results) {
-    const filename = `split-everyday-${result.aspectRatio.replace(":", "x")}.png`;
-    await writeFile(resolve(outputDir, filename), result.imageBuffer);
-    console.log(`  Saved: test-output/${filename} (${Math.round(result.imageBuffer.length / 1024)} KB)`);
-  }
+  await writeFile(resolve(outputDir, "forward-everyday.png"), result.imageBuffer);
+  console.log(`  Saved: test-output/forward-everyday.png (${Math.round(result.imageBuffer.length / 1024)} KB)`);
 }
 
 // ============================================================

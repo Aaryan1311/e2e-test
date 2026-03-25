@@ -1,16 +1,17 @@
 import type { Request, Response, NextFunction } from "express";
 import type { RenderRequest } from "../../types/index.js";
 import { getTheme } from "../../config/themes/index.js";
-import { getCanvas } from "../../config/canvases.js";
-import { analyzeSpatial } from "../../engine/spatial-analyzer/index.js";
+import { canvasFromImage } from "../../engine/canvas-from-image.js";
+import { resolveLayoutMode } from "../../engine/layout-modes/index.js";
 import { resolveLayout } from "../../engine/layout-resolver/index.js";
 import { buildHtml } from "../../engine/html-builder/index.js";
 import { checkQuality } from "../../engine/quality-checker/index.js";
 import { successResponse } from "../responses.js";
+import type { SpatialAnalysisResult } from "../../engine/types.js";
 
 /**
  * POST /preview — Returns generated HTML instead of PNG for debugging.
- * Only processes the first aspect ratio from the request.
+ * Canvas size derived from the background image.
  */
 export async function previewHandler(
   req: Request,
@@ -20,19 +21,20 @@ export async function previewHandler(
   try {
     const request = req.body as RenderRequest;
     const theme = getTheme(request.accountType);
-    const aspectRatio = request.aspectRatios[0]!;
-    const canvas = getCanvas(aspectRatio);
+    const canvas = await canvasFromImage(request.backgroundImage);
 
-    const spatialResult = await analyzeSpatial(
-      request.backgroundImage,
-      canvas,
-      theme,
-      request.subjectPosition
-    );
+    const layoutConfig = await resolveLayoutMode(request, canvas, theme);
 
-    const layoutResult = await resolveLayout(request, canvas, theme, spatialResult);
+    const spatialResult: SpatialAnalysisResult = {
+      subjectBounds: null,
+      textZone: layoutConfig.textZone,
+      overlay: layoutConfig.overlay ?? { type: "none", css: "", opacity: 0 },
+      confidence: 1.0,
+    };
+
+    const layoutResult = await resolveLayout(request, canvas, theme, spatialResult, layoutConfig);
     const qualityCheck = checkQuality(layoutResult);
-    const html = await buildHtml(layoutResult);
+    const html = await buildHtml(layoutResult, request.includeLogo);
 
     res.json(
       successResponse({

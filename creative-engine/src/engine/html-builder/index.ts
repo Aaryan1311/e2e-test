@@ -17,12 +17,12 @@ import { renderInfinityBridge } from "./infinity-bridge-renderer.js";
  * - "image-overlay": Full-bleed background with gradient overlay
  * - "image-forward": Full-bleed background, minimal text (pinned only)
  */
-export async function buildHtml(layoutResult: LayoutResult): Promise<string> {
+export async function buildHtml(layoutResult: LayoutResult, includeLogo?: boolean): Promise<string> {
   const { canvas, theme, backgroundImage, layoutMode, layoutConfig } = layoutResult;
   const mode = layoutMode ?? "image-overlay";
 
   const fontFaces = await generateFontFaces(theme);
-  const logoElement = await renderLogo(theme, canvas);
+  const logoElement = (includeLogo ?? true) ? await renderLogo(theme, canvas) : "";
 
   // Render all blocks
   const stackedBlockElements = layoutResult.stackedBlocks

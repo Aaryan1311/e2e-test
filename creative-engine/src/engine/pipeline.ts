@@ -1,7 +1,7 @@
 import { RenderRequestSchema } from "../types/index.js";
 import type { RenderRequest, RenderResult, LayoutMode } from "../types/index.js";
 import { getTheme } from "../config/themes/index.js";
-import { getCanvas } from "../config/canvases.js";
+import { canvasFromImage } from "./canvas-from-image.js";
 import { resolveLayoutMode } from "./layout-modes/index.js";
 import { resolveLayout } from "./layout-resolver/index.js";
 import { buildHtml } from "./html-builder/index.js";
@@ -12,13 +12,11 @@ import type { LayoutResult, QualityCheckResult, SpatialAnalysisResult } from "./
 const MAX_FIX_ATTEMPTS = 2;
 
 /**
- * Attempts to auto-fix a layout that failed quality checks by adjusting
- * the theme's blockGap (for overlap/spacing issues) or scaling down blocks
- * (for overflow issues). Returns a new layout result.
+ * Attempts to auto-fix a layout that failed quality checks.
  */
 async function attemptAutoFix(
   request: RenderRequest,
-  canvas: ReturnType<typeof getCanvas>,
+  canvas: ReturnType<typeof canvasFromImage extends (...args: unknown[]) => Promise<infer R> ? R : never>,
   theme: ReturnType<typeof getTheme>,
   spatialResult: SpatialAnalysisResult,
   qualityResult: QualityCheckResult,
@@ -44,23 +42,22 @@ async function attemptAutoFix(
 }
 
 /**
- * End-to-end pipeline: takes a raw RenderRequest and produces final PNG images.
+ * Primary pipeline: one image in, one image out.
  *
- * Steps per aspect ratio:
+ * Steps:
  * 1. Validate request via Zod schema
- * 2. Load theme and canvas configs
- * 3. Resolve layout mode (split skips spatial analysis, image-overlay uses it)
- * 4. Resolve layout (block positions)
- * 5. Run quality checks (with auto-fix attempts)
- * 6. Build self-contained HTML
- * 7. Render to PNG via Puppeteer
- *
- * Multiple aspect ratios are rendered concurrently.
- * If one ratio fails, successful ones are still returned.
+ * 2. Load theme
+ * 3. Read image dimensions → create canvas (canvasFromImage)
+ * 4. Resolve layout mode (split/overlay/forward)
+ * 5. Resolve layout (sort blocks, merge styles, allocate space, calculate positions)
+ * 6. Quality check (with auto-fix if needed)
+ * 7. Build HTML
+ * 8. Render to PNG via Puppeteer
+ * 9. Return single RenderResult
  */
-export async function generateCreatives(
+export async function generateCreative(
   request: RenderRequest
-): Promise<RenderResult[]> {
+): Promise<RenderResult> {
   const totalStart = performance.now();
 
   // Validate request
@@ -69,7 +66,14 @@ export async function generateCreatives(
     throw new Error(`[Pipeline] Invalid render request: ${parsed.error.message}`);
   }
 
-  // Default layoutMode if not provided (backward compatibility)
+  // Warn about deprecated aspectRatios
+  if (request.aspectRatios && request.aspectRatios.length > 0) {
+    console.warn(
+      `[Pipeline] "aspectRatios" is deprecated — canvas size is now derived from the background image`
+    );
+  }
+
+  // Default layoutMode if not provided
   const layoutMode: LayoutMode = request.layoutMode ?? "split";
   if (!request.layoutMode) {
     console.warn("[Pipeline] No layoutMode specified, defaulting to 'split'");
@@ -78,135 +82,129 @@ export async function generateCreatives(
   // Load theme
   const theme = getTheme(request.accountType);
   console.log(
-    `[Pipeline] Starting render for "${request.accountType}" mode="${layoutMode}" — ${request.aspectRatios.length} aspect ratio(s)`
+    `[Pipeline] Starting render for "${request.accountType}" mode="${layoutMode}"`
   );
 
-  // Process each aspect ratio concurrently
-  const results = await Promise.allSettled(
-    request.aspectRatios.map(async (aspectRatio) => {
-      // Load canvas
-      const canvas = getCanvas(aspectRatio);
-
-      // Resolve layout mode configuration
-      const modeStart = performance.now();
-      const layoutConfig = await resolveLayoutMode(request, canvas, theme);
-      console.log(
-        `[Pipeline] Layout mode "${layoutMode}" resolved for ${aspectRatio} (${Math.round(performance.now() - modeStart)}ms)`
-      );
-
-      // Create a minimal SpatialAnalysisResult for the layout resolver
-      const spatialResult: SpatialAnalysisResult = {
-        subjectBounds: null,
-        textZone: layoutConfig.textZone,
-        overlay: layoutConfig.overlay ?? {
-          type: "none",
-          css: "",
-          opacity: 0,
-        },
-        confidence: layoutMode === "split" || layoutMode === "image-forward" ? 1.0 : 0.5,
-      };
-
-      // Layout resolution
-      const layoutStart = performance.now();
-      let layoutResult = await resolveLayout(
-        request, canvas, theme, spatialResult, layoutConfig
-      );
-      console.log(
-        `[Pipeline] Layout resolved for ${aspectRatio} (${Math.round(performance.now() - layoutStart)}ms)`
-      );
-
-      // Quality check with auto-fix
-      let qualityResult = checkQuality(layoutResult);
-      console.log(
-        `[Quality] ${aspectRatio} — score: ${qualityResult.score}, passed: ${qualityResult.passed}`
-      );
-
-      if (!qualityResult.passed) {
-        for (let attempt = 0; attempt < MAX_FIX_ATTEMPTS; attempt++) {
-          const hasFontSizeError = qualityResult.checks.some(
-            (c) => c.name === "font-size" && !c.passed
-          );
-          if (hasFontSizeError) {
-            console.warn(`[Quality] Font size error cannot be auto-fixed for ${aspectRatio}`);
-            break;
-          }
-
-          console.log(`[Quality] Attempting auto-fix #${attempt + 1} for ${aspectRatio}`);
-          layoutResult = await attemptAutoFix(
-            request, canvas, theme, spatialResult, qualityResult, layoutConfig
-          );
-          qualityResult = checkQuality(layoutResult);
-          console.log(
-            `[Quality] After fix #${attempt + 1}: score: ${qualityResult.score}, passed: ${qualityResult.passed}`
-          );
-
-          if (qualityResult.passed) break;
-        }
-
-        if (!qualityResult.passed) {
-          console.warn(
-            `[Quality] Proceeding with imperfect layout for ${aspectRatio} (score: ${qualityResult.score})`
-          );
-        }
-      }
-
-      // HTML building
-      const htmlStart = performance.now();
-      const html = await buildHtml(layoutResult);
-      console.log(
-        `[Pipeline] HTML built for ${aspectRatio} (${Math.round(performance.now() - htmlStart)}ms)`
-      );
-
-      // Rendering
-      const renderStart = performance.now();
-      const imageBuffer = await renderToImage(html, canvas);
-      console.log(
-        `[Pipeline] Rendered ${aspectRatio} at ${canvas.width}x${canvas.height} (${Math.round(performance.now() - renderStart)}ms)`
-      );
-
-      // Build quality checks map for metadata
-      const qualityChecks: Record<string, boolean> = {};
-      for (const check of qualityResult.checks) {
-        qualityChecks[check.name] = check.passed;
-      }
-
-      const result: RenderResult = {
-        aspectRatio,
-        canvasId: canvas.id,
-        width: canvas.width,
-        height: canvas.height,
-        imageBuffer,
-        metadata: {
-          textZone: layoutConfig.textZone,
-          blocksRendered: [
-            ...layoutResult.stackedBlocks.map((b) => b.type),
-            ...layoutResult.pinnedBlocks.map((b) => b.type),
-          ],
-          qualityChecks,
-        },
-      };
-
-      return result;
-    })
+  // Read image dimensions → create canvas
+  const canvas = await canvasFromImage(request.backgroundImage);
+  console.log(
+    `[Pipeline] Canvas from image: ${canvas.width}x${canvas.height} (${canvas.aspectRatio})`
   );
 
-  // Collect successful results, log failures
-  const successResults: RenderResult[] = [];
-  let failCount = 0;
+  // Resolve layout mode configuration
+  const modeStart = performance.now();
+  const layoutConfig = await resolveLayoutMode(request, canvas, theme);
+  console.log(
+    `[Pipeline] Layout mode "${layoutMode}" resolved (${Math.round(performance.now() - modeStart)}ms)`
+  );
 
-  for (const result of results) {
-    if (result.status === "fulfilled") {
-      successResults.push(result.value);
-    } else {
-      failCount++;
-      console.error(`[Pipeline] Render failed: ${result.reason}`);
+  // Create spatial result
+  const spatialResult: SpatialAnalysisResult = {
+    subjectBounds: null,
+    textZone: layoutConfig.textZone,
+    overlay: layoutConfig.overlay ?? {
+      type: "none",
+      css: "",
+      opacity: 0,
+    },
+    confidence: layoutMode === "split" || layoutMode === "image-forward" ? 1.0 : 0.5,
+  };
+
+  // Layout resolution
+  const layoutStart = performance.now();
+  let layoutResult = await resolveLayout(
+    request, canvas, theme, spatialResult, layoutConfig
+  );
+  console.log(
+    `[Pipeline] Layout resolved (${Math.round(performance.now() - layoutStart)}ms)`
+  );
+
+  // Quality check with auto-fix
+  let qualityResult = checkQuality(layoutResult);
+  console.log(
+    `[Quality] score: ${qualityResult.score}, passed: ${qualityResult.passed}`
+  );
+
+  if (!qualityResult.passed) {
+    for (let attempt = 0; attempt < MAX_FIX_ATTEMPTS; attempt++) {
+      const hasFontSizeError = qualityResult.checks.some(
+        (c) => c.name === "font-size" && !c.passed
+      );
+      if (hasFontSizeError) {
+        console.warn(`[Quality] Font size error cannot be auto-fixed`);
+        break;
+      }
+
+      console.log(`[Quality] Attempting auto-fix #${attempt + 1}`);
+      layoutResult = await attemptAutoFix(
+        request, canvas, theme, spatialResult, qualityResult, layoutConfig
+      );
+      qualityResult = checkQuality(layoutResult);
+      console.log(
+        `[Quality] After fix #${attempt + 1}: score: ${qualityResult.score}, passed: ${qualityResult.passed}`
+      );
+
+      if (qualityResult.passed) break;
+    }
+
+    if (!qualityResult.passed) {
+      console.warn(
+        `[Quality] Proceeding with imperfect layout (score: ${qualityResult.score})`
+      );
     }
   }
 
-  const totalMs = Math.round(performance.now() - totalStart);
+  // HTML building — pass includeLogo flag
+  const htmlStart = performance.now();
+  const html = await buildHtml(layoutResult, request.includeLogo);
   console.log(
-    `[Pipeline] Complete — ${successResults.length}/${request.aspectRatios.length} succeeded (${totalMs}ms total)`
+    `[Pipeline] HTML built (${Math.round(performance.now() - htmlStart)}ms)`
   );
 
-  return successResults;
+  // Rendering
+  const renderStart = performance.now();
+  const imageBuffer = await renderToImage(html, canvas);
+  console.log(
+    `[Pipeline] Rendered at ${canvas.width}x${canvas.height} (${Math.round(performance.now() - renderStart)}ms)`
+  );
+
+  // Build quality checks map
+  const qualityChecks: Record<string, boolean> = {};
+  for (const check of qualityResult.checks) {
+    qualityChecks[check.name] = check.passed;
+  }
+
+  const totalMs = Math.round(performance.now() - totalStart);
+  console.log(`[Pipeline] Complete (${totalMs}ms total)`);
+
+  return {
+    aspectRatio: canvas.aspectRatio,
+    canvasId: canvas.id,
+    width: canvas.width,
+    height: canvas.height,
+    imageBuffer,
+    metadata: {
+      textZone: layoutConfig.textZone,
+      blocksRendered: [
+        ...layoutResult.stackedBlocks.map((b) => b.type),
+        ...layoutResult.pinnedBlocks.map((b) => b.type),
+      ],
+      qualityChecks,
+    },
+  };
+}
+
+/**
+ * @deprecated Use generateCreative (singular) instead.
+ * Kept for backward compatibility. Ignores aspectRatios and returns
+ * a single-element array with the result from generateCreative.
+ */
+export async function generateCreatives(
+  request: RenderRequest
+): Promise<RenderResult[]> {
+  console.warn(
+    "[Pipeline] generateCreatives is deprecated — use generateCreative (singular)"
+  );
+  const result = await generateCreative(request);
+  return [result];
 }

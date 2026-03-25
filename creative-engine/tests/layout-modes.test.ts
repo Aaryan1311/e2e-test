@@ -115,7 +115,6 @@ console.log("\n--- Image-Overlay Mode ---");
 {
   const request: RenderRequest = {
     accountType: "everyday",
-    aspectRatios: ["1:1"],
     backgroundImage: "",
     layoutMode: "image-overlay",
     blocks: [{ type: "heading", content: "Test" }],
@@ -141,7 +140,6 @@ console.log("\n--- Image-Forward: Only Pinned Blocks ---");
 {
   const request: RenderRequest = {
     accountType: "everyday",
-    aspectRatios: ["1:1"],
     backgroundImage: "",
     layoutMode: "image-forward",
     blocks: [
@@ -232,7 +230,6 @@ console.log("\n--- Cross-Mode: Different HTML Structures ---");
 {
   const request: RenderRequest = {
     accountType: "everyday",
-    aspectRatios: ["1:1"],
     backgroundImage: "",
     blocks: [
       { type: "heading", content: "Test Heading" },

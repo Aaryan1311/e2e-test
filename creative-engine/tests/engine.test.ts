@@ -350,7 +350,6 @@ console.log("\n--- Integration Test ---");
 
   const request: RenderRequest = {
     accountType: "everyday",
-    aspectRatios: ["1:1"],
     backgroundImage: "/test/bg.jpg",
     blocks: [
       makeBlock("heading", "Open a Savings Account"),
