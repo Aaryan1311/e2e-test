@@ -1,0 +1,8 @@
+{
+  "imageType": "portrait",
+  "account": "everyday",
+  "fields": [
+    { "type": "heading", "content": "Your dream home" },
+    { "type": "subheading", "content": "becoming reality" }
+  ]
+}

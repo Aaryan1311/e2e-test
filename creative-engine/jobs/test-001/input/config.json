@@ -1,0 +1,18 @@
+{
+  "imageType": "full",
+  "account": "everyday",
+  "gradient": {
+    "color": "rgba(255, 255, 255, 0.8)",
+    "width": 50
+  },
+  "fields": [
+    {
+      "type": "heading",
+      "content": "Unlock the<br>Exclusive Rewards"
+    },
+    {
+      "type": "subheading",
+      "content": "Unlock Exclusive Rewards"
+    }
+  ]
+}

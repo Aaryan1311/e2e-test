@@ -4,26 +4,23 @@
   "description": "Creative Rendering Engine for dynamically generating brand-compliant marketing creatives",
   "type": "module",
   "scripts": {
+    "job": "tsx src/index.ts",
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "typecheck": "tsc --noEmit",
-    "test": "tsx tests/visual-qa.ts"
+    "test": "tsx tests/run-all-jobs.ts"
   },
   "engines": {
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "express": "^5.2.1",
-    "puppeteer-core": "^24.40.0",
+    "puppeteer": "^24.40.0",
     "sharp": "^0.34.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/express": "^5.0.6",
     "@types/node": "^25.5.0",
     "@types/sharp": "^0.32.0",
-    "@types/supertest": "^7.2.0",
-    "supertest": "^7.2.2",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   }

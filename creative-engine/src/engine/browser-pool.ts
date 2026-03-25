@@ -1,4 +1,5 @@
-import puppeteer, { type Browser } from "puppeteer-core";
+import puppeteer, { type Browser } from "puppeteer";
+import { existsSync } from "node:fs";
 
 interface BrowserPoolConfig {
   minInstances: number;
@@ -12,10 +13,6 @@ const DEFAULT_CONFIG: BrowserPoolConfig = {
   idleTimeoutMs: 60000,
 };
 
-const CHROME_PATH =
-  process.env["CHROME_PATH"] ??
-  "/root/.cache/ms-playwright/chromium-1194/chrome-linux/chrome";
-
 const LAUNCH_ARGS = [
   "--no-sandbox",
   "--disable-setuid-sandbox",
@@ -24,6 +21,26 @@ const LAUNCH_ARGS = [
   "--disable-software-rasterizer",
   "--single-process",
 ];
+
+/**
+ * Find a Chrome/Chromium executable. Puppeteer's bundled Chrome is preferred,
+ * but fall back to well-known paths if it wasn't downloaded.
+ */
+function findChromePath(): string | undefined {
+  if (process.env["CHROME_PATH"] && existsSync(process.env["CHROME_PATH"])) {
+    return process.env["CHROME_PATH"];
+  }
+  const fallbacks = [
+    "/root/.cache/ms-playwright/chromium-1194/chrome-linux/chrome",
+    "/usr/bin/chromium-browser",
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium",
+  ];
+  for (const p of fallbacks) {
+    if (existsSync(p)) return p;
+  }
+  return undefined; // let puppeteer try its own bundled chrome
+}
 
 interface PooledBrowser {
   browser: Browser;
@@ -41,8 +58,9 @@ export class BrowserPool {
   }
 
   private async createBrowser(): Promise<Browser> {
+    const executablePath = findChromePath();
     return puppeteer.launch({
-      executablePath: CHROME_PATH,
+      ...(executablePath ? { executablePath } : {}),
       headless: true,
       args: LAUNCH_ARGS,
     });

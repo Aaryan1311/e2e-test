@@ -1,7 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import sharp from "sharp";
-import type { Theme, FontConfig } from "../types/index.js";
+import type { Theme, FontConfig, ResolvedHeader, GradientConfig, FieldOverrides } from "../types/index.js";
 import type { SizedField, SizingResult } from "./dynamic-sizer.js";
 import type { TextZoneResult } from "./text-zone-detector.js";
 import { generateFontFaces } from "./font-loader.js";
@@ -9,7 +8,7 @@ import { browserPool } from "./browser-pool.js";
 
 /**
  * Composes the final image by rendering text fields onto the background image.
- * Uses HTML + Puppeteer for pixel-perfect text rendering.
+ * Returns both the PNG buffer and the HTML string (for debug).
  */
 export async function compose(
   imagePath: string,
@@ -18,25 +17,24 @@ export async function compose(
   textZoneResult: TextZoneResult,
   sizingResult: SizingResult,
   theme: Theme,
-): Promise<Buffer> {
-  // 1. Read background image as base64
-  const imageBuffer = await readImageAsBase64(imagePath);
-
-  // 2. Generate font faces
+  headerConfig?: ResolvedHeader | null,
+  gradientConfig?: GradientConfig,
+): Promise<{ imageBuffer: Buffer; html: string }> {
+  const imageDataURI = await readImageAsBase64(imagePath);
   const fontFaceCSS = await generateFontFaces(theme);
 
-  // 3. Build HTML
   const html = buildHTML(
-    imageBuffer,
+    imageDataURI,
     imageWidth,
     imageHeight,
     textZoneResult,
     sizingResult,
     theme,
     fontFaceCSS,
+    headerConfig ?? null,
+    gradientConfig,
   );
 
-  // 4. Screenshot with Puppeteer
   const browser = await browserPool.acquire();
   try {
     const page = await browser.newPage();
@@ -45,7 +43,6 @@ export async function compose(
       waitUntil: "domcontentloaded",
       timeout: 30000,
     });
-    // Brief wait for font rendering
     await new Promise((r) => setTimeout(r, 300));
 
     const screenshot = await page.screenshot({
@@ -54,40 +51,14 @@ export async function compose(
       clip: { x: 0, y: 0, width: imageWidth, height: imageHeight },
     });
     await page.close();
-    return Buffer.from(screenshot);
+    return { imageBuffer: Buffer.from(screenshot), html };
   } finally {
     await browserPool.release(browser);
   }
 }
 
-/**
- * Generates the HTML string without taking a screenshot (for preview/debugging).
- */
-export async function composeHTML(
-  imagePath: string,
-  imageWidth: number,
-  imageHeight: number,
-  textZoneResult: TextZoneResult,
-  sizingResult: SizingResult,
-  theme: Theme,
-): Promise<string> {
-  const imageBuffer = await readImageAsBase64(imagePath);
-  const fontFaceCSS = await generateFontFaces(theme);
-
-  return buildHTML(
-    imageBuffer,
-    imageWidth,
-    imageHeight,
-    textZoneResult,
-    sizingResult,
-    theme,
-    fontFaceCSS,
-  );
-}
-
 async function readImageAsBase64(imagePath: string): Promise<string> {
   if (imagePath.startsWith("http://") || imagePath.startsWith("https://")) {
-    // For remote URLs, fetch and convert
     const response = await fetch(imagePath);
     const buffer = Buffer.from(await response.arrayBuffer());
     return `data:image/jpeg;base64,${buffer.toString("base64")}`;
@@ -96,7 +67,6 @@ async function readImageAsBase64(imagePath: string): Promise<string> {
   const absPath = resolve(process.cwd(), imagePath);
   const buffer = await readFile(absPath);
 
-  // Detect format from buffer magic bytes
   let mime = "image/png";
   if (buffer[0] === 0xff && buffer[1] === 0xd8) mime = "image/jpeg";
   else if (buffer[0] === 0x89 && buffer[1] === 0x50) mime = "image/png";
@@ -112,59 +82,37 @@ function buildHTML(
   sizingResult: SizingResult,
   theme: Theme,
   fontFaceCSS: string,
+  headerConfig: ResolvedHeader | null,
+  gradientConfig?: GradientConfig,
 ): string {
-  const { textZone, isOnSolidBackground, needsOverlay, overlayZone, textSide } =
-    textZoneResult;
+  const { textZone, isOnSolidBackground, needsOverlay, textSide } = textZoneResult;
   const { fields, verticalOffset } = sizingResult;
 
-  // Build overlay HTML
-  let overlayHTML = "";
-  if (needsOverlay && overlayZone) {
-    let gradientDir = "to right";
-    if (textSide === "right") gradientDir = "to left";
-    if (textSide === "top") gradientDir = "to bottom";
+  // Build overlay/gradient HTML
+  const overlayHTML = renderGradient(textZoneResult, width, height, gradientConfig, theme);
 
-    overlayHTML = `<div style="
-      position: absolute;
-      left: ${overlayZone.x}px;
-      top: ${overlayZone.y}px;
-      width: ${overlayZone.width}px;
-      height: ${overlayZone.height}px;
-      background: linear-gradient(
-        ${gradientDir},
-        ${theme.colors.overlay} 0%,
-        ${theme.colors.overlay} 60%,
-        transparent 100%
-      );
-      z-index: 2;
-    "></div>`;
-  }
+  // Build header HTML
+  const headerHTML = headerConfig ? renderHeader(headerConfig, textZone) : "";
 
   // Build field HTML
   let cumulativeY = 0;
+  // If header exists, fields start below it (headerConfig.totalHeight already subtracted from textZone)
   const fieldDivs = fields
     .map((field) => {
       const currentY = textZone.y + verticalOffset + cumulativeY;
       cumulativeY += field.estimatedHeight + field.gap;
 
-      const fontConfig = theme.fonts[field.rule.fontKey];
-      const textColor = getTextColor(field, theme, isOnSolidBackground);
-      const content = renderFieldContent(field, theme, isOnSolidBackground, fontConfig);
+      const style = getFieldStyle(field, theme, isOnSolidBackground);
+      const content = renderFieldContent(field, theme, isOnSolidBackground);
 
       return `<div style="
         position: absolute;
         left: ${textZone.x}px;
         top: ${currentY}px;
         width: ${textZone.width}px;
-        font-family: '${fontConfig.family}', sans-serif;
-        font-size: ${field.fontSize}px;
-        font-weight: ${fontConfig.weight};
-        font-style: ${fontConfig.style};
-        line-height: ${field.lineHeight}px;
-        color: ${textColor};
+        ${style}
         z-index: 10;
         overflow: hidden;
-        ${field.rule.textTransform ? `text-transform: ${field.rule.textTransform};` : ""}
       ">${content}</div>`;
     })
     .join("\n");
@@ -189,6 +137,8 @@ body { width: ${width}px; height: ${height}px; overflow: hidden; }
   " />
   <!-- Overlay -->
   ${overlayHTML}
+  <!-- Header -->
+  ${headerHTML}
   <!-- Text fields -->
   ${fieldDivs}
 </div>
@@ -196,22 +146,135 @@ body { width: ${width}px; height: ${height}px; overflow: hidden; }
 </html>`;
 }
 
-function getTextColor(
+function renderGradient(
+  textZoneResult: TextZoneResult,
+  imageWidth: number,
+  imageHeight: number,
+  gradientConfig: GradientConfig | undefined,
+  theme: Theme,
+): string {
+  if (!textZoneResult.needsOverlay) return "";
+  if (gradientConfig?.enabled === false) return "";
+
+  const color = gradientConfig?.color ?? theme.colors.overlay;
+  const widthPercent = gradientConfig?.width ?? 55;
+  const gradientWidth = Math.round(imageWidth * (widthPercent / 100));
+
+  let direction = gradientConfig?.direction;
+  if (!direction) {
+    if (textZoneResult.textSide === "right") {
+      direction = "to left";
+    } else if (textZoneResult.textSide === "top") {
+      direction = "to bottom";
+    } else {
+      direction = "to right";
+    }
+  }
+
+  let overlayX = 0;
+  let overlayWidth = gradientWidth;
+
+  if (direction === "to right") {
+    overlayX = 0;
+  } else if (direction === "to left") {
+    overlayX = imageWidth - gradientWidth;
+  } else {
+    overlayX = 0;
+    overlayWidth = imageWidth;
+  }
+
+  return `<div style="
+    position: absolute;
+    left: ${overlayX}px;
+    top: 0;
+    width: ${overlayWidth}px;
+    height: ${imageHeight}px;
+    background: linear-gradient(${direction}, ${color} 0%, ${color} 50%, transparent 100%);
+    z-index: 2;
+  "></div>`;
+}
+
+function renderHeader(
+  header: ResolvedHeader,
+  textZone: { x: number; y: number; width: number },
+): string {
+  const logoHTML = header.logoBase64
+    ? `<img src="${header.logoBase64}" width="${header.logoWidth}" height="${header.logoHeight}" style="flex-shrink: 0;" />`
+    : "";
+
+  const nameHTML = header.productName
+    ? `<span style="
+        font-family: '${header.productNameFontFamily}', sans-serif;
+        font-size: ${header.productNameFontSize}px;
+        font-weight: ${header.productNameFontWeight};
+        color: ${header.productNameColor};
+        line-height: 1.2;
+      ">${escapeHTML(header.productName)}</span>`
+    : "";
+
+  if (!logoHTML && !nameHTML) return "";
+
+  // Header is pinned at the original text zone top (before header height was subtracted)
+  const headerTop = textZone.y - header.totalHeight + header.paddingTop;
+
+  return `<div style="
+    position: absolute;
+    left: ${header.paddingLeft}px;
+    top: ${Math.max(headerTop, textZone.y - header.totalHeight)}px;
+    width: ${textZone.width}px;
+    display: flex;
+    align-items: center;
+    gap: ${header.gap}px;
+    z-index: 10;
+    padding-top: ${header.paddingTop}px;
+  ">${logoHTML}${nameHTML}</div>`;
+}
+
+function getFieldStyle(
   field: SizedField,
   theme: Theme,
   isOnSolid: boolean,
 ): string {
-  if (isOnSolid) return theme.colors.onPrimary;
+  const rule = field.rule;
+  const fontConfig = theme.fonts[rule.fontKey];
+  const overrides = field.overrides;
 
-  const colorKey = field.rule.colorKey as keyof typeof theme.colors;
-  return theme.colors[colorKey] ?? theme.colors.body;
+  const fontFamily = overrides?.fontFamily ?? fontConfig.family;
+  const fontWeight = overrides?.fontWeight ?? fontConfig.weight;
+  const fontStyle = overrides?.fontStyle ?? fontConfig.style;
+  const letterSpacing = overrides?.letterSpacing ?? "0px";
+  const textTransform = overrides?.textTransform ?? rule.textTransform ?? "none";
+  const textAlign = overrides?.textAlign ?? "left";
+  const opacity = overrides?.opacity ?? 1;
+
+  let color: string;
+  if (overrides?.color) {
+    color = overrides.color;
+  } else if (isOnSolid) {
+    color = theme.colors.onPrimary;
+  } else {
+    const colorKey = rule.colorKey as keyof typeof theme.colors;
+    color = theme.colors[colorKey] ?? theme.colors.body;
+  }
+
+  return `
+    font-family: '${fontFamily}', sans-serif;
+    font-size: ${field.fontSize}px;
+    font-weight: ${fontWeight};
+    font-style: ${fontStyle};
+    line-height: ${field.lineHeight}px;
+    color: ${color};
+    letter-spacing: ${letterSpacing};
+    text-transform: ${textTransform};
+    text-align: ${textAlign};
+    opacity: ${opacity};
+  `;
 }
 
 function renderFieldContent(
   field: SizedField,
   theme: Theme,
   isOnSolid: boolean,
-  fontConfig: FontConfig,
 ): string {
   switch (field.type) {
     case "bullets": {
@@ -227,11 +290,13 @@ function renderFieldContent(
     case "cta": {
       const bgColor = isOnSolid ? theme.colors.onPrimary : theme.colors.primary;
       const fgColor = isOnSolid ? theme.colors.primary : theme.colors.onPrimary;
+      // Use override color for CTA text if specified
+      const overrideColor = field.overrides?.color;
       return `<div style="
         display: inline-block;
         padding: ${Math.round(field.fontSize * 0.3)}px ${Math.round(field.fontSize * 0.8)}px;
         background-color: ${bgColor};
-        color: ${fgColor};
+        color: ${overrideColor ?? fgColor};
         border-radius: 4px;
         font-weight: 700;
       ">${escapeHTML(field.content)}</div>`;
@@ -241,8 +306,18 @@ function renderFieldContent(
       return `<span style="opacity: 0.7;">${escapeHTML(field.content)}</span>`;
 
     default:
-      return escapeHTML(field.content);
+      // Support <br> tags in content — pass through as raw HTML
+      return escapeSafe(field.content);
   }
+}
+
+/**
+ * Escapes HTML but preserves <br> and <br/> tags for explicit line breaks.
+ */
+function escapeSafe(text: string): string {
+  // First split on <br> variants, escape each part, then rejoin with <br>
+  const parts = text.split(/<br\s*\/?>/gi);
+  return parts.map(escapeHTML).join("<br>");
 }
 
 function escapeHTML(text: string): string {

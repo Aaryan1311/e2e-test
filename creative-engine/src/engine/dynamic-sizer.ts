@@ -1,4 +1,4 @@
-import type { TextField, BoundingBox, FieldStyleRule } from "../types/index.js";
+import type { TextField, BoundingBox, FieldStyleRule, FieldOverrides } from "../types/index.js";
 import { FIELD_STYLE_RULES, DEFAULT_FIELD_RULE } from "../config/themes.js";
 
 export interface SizedField {
@@ -10,6 +10,7 @@ export interface SizedField {
   estimatedHeight: number;
   gap: number;
   rule: FieldStyleRule;
+  overrides?: FieldOverrides;
 }
 
 export interface SizingResult {

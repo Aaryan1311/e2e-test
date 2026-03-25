@@ -9,3 +9,6 @@ coverage/
 .turbo/
 test-output/
 output/
+jobs/*/output/
+jobs/*/input/image.png
+jobs/*/input/logo.png

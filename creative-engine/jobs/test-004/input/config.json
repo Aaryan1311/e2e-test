@@ -1,0 +1,13 @@
+{
+  "imageType": "full",
+  "account": "everyday",
+  "fields": [
+    { "type": "heading", "content": "Explore the World" },
+    { "type": "subheading", "content": "with Kotak Travel Card" },
+    { "type": "offer-line", "content": "Limited offer: Zero annual fee" },
+    { "type": "solution-line", "content": "Load currencies, spend anywhere, track everything" },
+    { "type": "bullets", "content": "", "items": ["Zero forex", "Insurance", "Lounge access"] },
+    { "type": "contact-line", "content": "Call 1800 266 2666" },
+    { "type": "disclaimer", "content": "T&C Apply. Kotak Mahindra Bank Ltd." }
+  ]
+}
