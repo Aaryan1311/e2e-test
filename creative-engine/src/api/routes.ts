@@ -1,25 +1,47 @@
-import { Router, type Router as RouterType } from "express";
+import { Router, type Request, type Response } from "express";
 import { RenderRequestSchema } from "../types/index.js";
-import { validate } from "./middleware/validator.js";
-import { healthHandler } from "./handlers/health.handler.js";
-import * as configHandler from "./handlers/config.handler.js";
-import { renderHandler } from "./handlers/render.handler.js";
-import { previewHandler } from "./handlers/preview.handler.js";
+import { render, preview } from "../engine/pipeline.js";
+import { themes, FIELD_STYLE_RULES } from "../config/themes.js";
 
-const router: RouterType = Router();
+export const router: ReturnType<typeof Router> = Router();
 
-// Health check
-router.get("/health", healthHandler);
+router.get("/health", (_req: Request, res: Response) => {
+  res.json({
+    status: "ok",
+    themes: Object.keys(themes),
+    fieldTypes: Object.keys(FIELD_STYLE_RULES),
+  });
+});
 
-// Config inspection endpoints
-router.get("/config/blocks", configHandler.listBlocks);
-router.get("/config/blocks/:type", configHandler.getBlock);
-router.get("/config/themes", configHandler.listThemes);
-router.get("/config/themes/:id", configHandler.getThemeById);
-router.get("/config/canvases", configHandler.listCanvases);
+router.post("/render", async (req: Request, res: Response) => {
+  try {
+    const parsed = RenderRequestSchema.parse(req.body);
+    const result = await render(parsed);
 
-// Render endpoints
-router.post("/render", validate(RenderRequestSchema), renderHandler);
-router.post("/preview", validate(RenderRequestSchema), previewHandler);
+    res.json({
+      imageBase64: result.imageBuffer.toString("base64"),
+      width: result.width,
+      height: result.height,
+      textZone: result.textZone,
+      fieldSizes: result.fieldSizes,
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[Render]", message);
+    res.status(400).json({ error: message });
+  }
+});
 
-export { router };
+router.post("/preview", async (req: Request, res: Response) => {
+  try {
+    const parsed = RenderRequestSchema.parse(req.body);
+    const html = await preview(parsed);
+
+    res.setHeader("Content-Type", "text/html");
+    res.send(html);
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[Preview]", message);
+    res.status(400).json({ error: message });
+  }
+});
