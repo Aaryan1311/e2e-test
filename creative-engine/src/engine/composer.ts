@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { Theme, FontConfig, ResolvedHeader, GradientConfig } from "../types/index.js";
+import type { Theme, ResolvedHeader, GradientConfig, Composition } from "../types/index.js";
 import type { SizedField, SizingResult } from "./dynamic-sizer.js";
 import type { TextZoneResult } from "./text-zone-detector.js";
-import type { GradientColors } from "./gradient-analyzer.js";
+import type { AnalyzedGradient } from "./gradient-analyzer.js";
 import { generateFontFaces } from "./font-loader.js";
 import { browserPool } from "./browser-pool.js";
 
@@ -20,7 +20,8 @@ export async function compose(
   theme: Theme,
   headerConfig?: ResolvedHeader | null,
   gradientConfig?: GradientConfig,
-  gradientColors?: GradientColors,
+  gradientColors?: AnalyzedGradient | null,
+  composition?: Composition,
 ): Promise<{ imageBuffer: Buffer; html: string }> {
   const imageDataURI = await readImageAsBase64(imagePath);
   const fontFaceCSS = await generateFontFaces(theme);
@@ -35,7 +36,8 @@ export async function compose(
     fontFaceCSS,
     headerConfig ?? null,
     gradientConfig,
-    gradientColors,
+    gradientColors ?? null,
+    composition ?? "bottomRight",
   );
 
   const browser = await browserPool.acquire();
@@ -86,26 +88,24 @@ function buildHTML(
   theme: Theme,
   fontFaceCSS: string,
   headerConfig: ResolvedHeader | null,
-  gradientConfig?: GradientConfig,
-  gradientColors?: GradientColors,
+  gradientConfig: GradientConfig | undefined,
+  gradientColors: AnalyzedGradient | null,
+  composition: Composition,
 ): string {
   const { textZone, isOnSolidBackground } = textZoneResult;
   const { fields, verticalOffset } = sizingResult;
 
-  // Build overlay/gradient HTML
   const overlayHTML = renderGradient(
     textZoneResult,
     width,
     height,
     gradientColors,
     gradientConfig,
-    textZoneResult.subjectStartX,
+    composition,
   );
 
-  // Build header HTML
   const headerHTML = headerConfig ? renderHeader(headerConfig, textZone) : "";
 
-  // Build field HTML
   let cumulativeY = 0;
   const fieldDivs = fields
     .map((field) => {
@@ -160,78 +160,71 @@ function renderGradient(
   textZoneResult: TextZoneResult,
   imageWidth: number,
   imageHeight: number,
-  gradientColors: GradientColors | undefined,
+  gradientColors: AnalyzedGradient | null,
   gradientConfig: GradientConfig | undefined,
-  subjectStartX?: number,
+  composition: Composition,
 ): string {
+  // halfAndHalf = no gradient at all
+  if (composition === "halfAndHalf") return "";
   if (!textZoneResult.needsOverlay) return "";
   if (gradientConfig?.enabled === false) return "";
 
   const useCustomColor = gradientConfig?.color != null;
+  const subjectBounds = textZoneResult.subjectBounds;
 
-  // Calculate gradient end point
-  let gradientEndPercent = gradientConfig?.width ?? 55;
-  if (subjectStartX && !gradientConfig?.width) {
-    const buffer = imageWidth * 0.10;
-    gradientEndPercent = Math.round(((subjectStartX - buffer) / imageWidth) * 100);
-    gradientEndPercent = Math.max(gradientEndPercent, 30);
-    gradientEndPercent = Math.min(gradientEndPercent, 70);
-  }
+  if (composition === "bottomCenter") {
+    // Vertical gradient from top down toward subject
+    const gradientHeight = Math.round(subjectBounds.y - imageHeight * 0.05);
+    let gradientCSS: string;
 
-  const isPortrait = textZoneResult.textSide === "top";
-  let gradientCSS: string;
-
-  if (isPortrait) {
-    // Portrait mode: vertical gradient from top
     if (useCustomColor) {
       const color = gradientConfig!.color!;
       gradientCSS = `linear-gradient(to bottom, ${color} 0%, ${color} 50%, transparent 85%)`;
     } else if (gradientColors) {
+      const { topColor: tc, middleColor: mc, bottomColor: bc } = gradientColors;
       gradientCSS = `linear-gradient(to bottom,
-        ${gradientColors.top} 0%,
-        ${gradientColors.middle} 40%,
-        ${gradientColors.bottom} 65%,
-        transparent 90%)`;
+        rgba(${tc.r}, ${tc.g}, ${tc.b}, 0.92) 0%,
+        rgba(${mc.r}, ${mc.g}, ${mc.b}, 0.85) 50%,
+        rgba(${bc.r}, ${bc.g}, ${bc.b}, 0.6) 75%,
+        transparent 100%)`;
     } else {
-      gradientCSS = `linear-gradient(to bottom, rgba(255,255,255,0.88) 0%, rgba(255,255,255,0.88) 50%, transparent 85%)`;
+      gradientCSS = `linear-gradient(to bottom, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.85) 50%, transparent 85%)`;
     }
-  } else if (textZoneResult.textSide === "right") {
-    // Text on right — gradient from right
-    if (useCustomColor) {
-      const color = gradientConfig!.color!;
-      const dir = gradientConfig?.direction ?? "to left";
-      gradientCSS = `linear-gradient(${dir}, ${color} 0%, ${color} ${gradientEndPercent * 0.6}%, transparent ${gradientEndPercent}%)`;
-    } else if (gradientColors) {
-      gradientCSS = `linear-gradient(to left,
-        ${gradientColors.top} 0%,
-        ${gradientColors.middle} ${gradientEndPercent * 0.5}%,
-        ${gradientColors.bottom} ${gradientEndPercent * 0.75}%,
-        transparent ${gradientEndPercent}%)`;
-    } else {
-      gradientCSS = `linear-gradient(to left, rgba(255,255,255,0.88) 0%, rgba(255,255,255,0.88) 50%, transparent 100%)`;
-    }
+
+    return `<div style="
+      position: absolute;
+      left: 0; top: 0;
+      width: ${imageWidth}px;
+      height: ${Math.max(gradientHeight, Math.round(imageHeight * 0.4))}px;
+      background: ${gradientCSS};
+      z-index: 2;
+    "></div>`;
+  }
+
+  // bottomRight: horizontal gradient from left toward subject
+  const gradientWidth = Math.round(subjectBounds.x + imageWidth * 0.10);
+  let gradientCSS: string;
+
+  if (useCustomColor) {
+    const color = gradientConfig!.color!;
+    const dir = gradientConfig?.direction ?? "to right";
+    const endPct = gradientConfig?.width ?? Math.round((subjectBounds.x / imageWidth) * 100);
+    gradientCSS = `linear-gradient(${dir}, ${color} 0%, ${color} ${endPct * 0.6}%, transparent ${endPct}%)`;
+  } else if (gradientColors) {
+    const { topColor: tc, middleColor: mc, bottomColor: bc } = gradientColors;
+    gradientCSS = `linear-gradient(to right,
+      rgba(${tc.r}, ${tc.g}, ${tc.b}, 0.92) 0%,
+      rgba(${mc.r}, ${mc.g}, ${mc.b}, 0.88) 40%,
+      rgba(${bc.r}, ${bc.g}, ${bc.b}, 0.75) 70%,
+      transparent 100%)`;
   } else {
-    // Text on left (default) — gradient from left
-    if (useCustomColor) {
-      const color = gradientConfig!.color!;
-      const dir = gradientConfig?.direction ?? "to right";
-      gradientCSS = `linear-gradient(${dir}, ${color} 0%, ${color} ${gradientEndPercent * 0.6}%, transparent ${gradientEndPercent}%)`;
-    } else if (gradientColors) {
-      gradientCSS = `linear-gradient(to right,
-        ${gradientColors.top} 0%,
-        ${gradientColors.middle} ${gradientEndPercent * 0.5}%,
-        ${gradientColors.bottom} ${gradientEndPercent * 0.75}%,
-        transparent ${gradientEndPercent}%)`;
-    } else {
-      gradientCSS = `linear-gradient(to right, rgba(255,255,255,0.88) 0%, rgba(255,255,255,0.88) 50%, transparent 100%)`;
-    }
+    gradientCSS = `linear-gradient(to right, rgba(255,255,255,0.92) 0%, rgba(255,255,255,0.88) 40%, transparent 100%)`;
   }
 
   return `<div style="
     position: absolute;
-    left: 0;
-    top: 0;
-    width: ${imageWidth}px;
+    left: 0; top: 0;
+    width: ${Math.min(gradientWidth, imageWidth)}px;
     height: ${imageHeight}px;
     background: ${gradientCSS};
     z-index: 2;

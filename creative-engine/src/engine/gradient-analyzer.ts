@@ -1,36 +1,39 @@
 import sharp from "sharp";
 import type { BoundingBox } from "../types/index.js";
 
-export interface GradientColors {
-  /** Dominant color in the top third of the text zone */
-  top: string;
-  /** Dominant color in the middle third */
-  middle: string;
-  /** Dominant color in the bottom third */
-  bottom: string;
-  /** Single best color for a uniform gradient */
-  dominant: string;
+export interface AnalyzedGradient {
+  /** Average color of the top portion of the text zone area */
+  topColor: { r: number; g: number; b: number };
+  /** Average color of the middle portion */
+  middleColor: { r: number; g: number; b: number };
+  /** Average color of the bottom portion */
+  bottomColor: { r: number; g: number; b: number };
 }
 
 /**
  * Analyzes the image in the text zone region to determine
  * natural gradient colors that blend with the background.
  */
-export async function analyzeGradientColors(
+export async function analyzeImageColors(
   imagePath: string,
   textZone: BoundingBox,
-  imageWidth: number,
-  imageHeight: number,
-): Promise<GradientColors> {
+): Promise<AnalyzedGradient> {
+  const metadata = await sharp(imagePath).metadata();
+  const imgW = metadata.width!;
+  const imgH = metadata.height!;
+
   // Clamp extraction region to image bounds
   const left = Math.max(0, Math.round(textZone.x));
   const top = Math.max(0, Math.round(textZone.y));
-  const extractWidth = Math.min(Math.round(textZone.width), imageWidth - left);
-  const extractHeight = Math.min(Math.round(textZone.height), imageHeight - top);
+  const extractWidth = Math.min(Math.round(textZone.width), imgW - left);
+  const extractHeight = Math.min(Math.round(textZone.height), imgH - top);
 
   if (extractWidth <= 0 || extractHeight <= 0) {
-    const fallback = "rgba(255, 255, 255, 0.88)";
-    return { top: fallback, middle: fallback, bottom: fallback, dominant: fallback };
+    return {
+      topColor: { r: 255, g: 255, b: 255 },
+      middleColor: { r: 255, g: 255, b: 255 },
+      bottomColor: { r: 255, g: 255, b: 255 },
+    };
   }
 
   const { data, info } = await sharp(imagePath)
@@ -42,7 +45,6 @@ export async function analyzeGradientColors(
   const width = info.width;
   const height = info.height;
   const channels = 4;
-
   const bandHeight = Math.floor(height / 3);
 
   const bands = [
@@ -53,12 +55,10 @@ export async function analyzeGradientColors(
 
   const bandColors: Array<{ r: number; g: number; b: number }> = [];
 
-  let totalR = 0, totalG = 0, totalB = 0, totalCount = 0;
-
   for (const band of bands) {
     let bR = 0, bG = 0, bB = 0, count = 0;
-    for (let y = band.startY; y < band.endY; y += 10) {
-      for (let x = 0; x < width; x += 10) {
+    for (let y = band.startY; y < band.endY; y += 8) {
+      for (let x = 0; x < width; x += 8) {
         const idx = (y * width + x) * channels;
         bR += data[idx]!;
         bG += data[idx + 1]!;
@@ -67,28 +67,16 @@ export async function analyzeGradientColors(
       }
     }
     if (count === 0) count = 1;
-    const avgR = Math.round(bR / count);
-    const avgG = Math.round(bG / count);
-    const avgB = Math.round(bB / count);
-    bandColors.push({ r: avgR, g: avgG, b: avgB });
-
-    totalR += bR;
-    totalG += bG;
-    totalB += bB;
-    totalCount += count;
+    bandColors.push({
+      r: Math.round(bR / count),
+      g: Math.round(bG / count),
+      b: Math.round(bB / count),
+    });
   }
 
-  if (totalCount === 0) totalCount = 1;
-  const domR = Math.round(totalR / totalCount);
-  const domG = Math.round(totalG / totalCount);
-  const domB = Math.round(totalB / totalCount);
-
-  const opacity = 0.88;
-
   return {
-    top: `rgba(${bandColors[0]!.r}, ${bandColors[0]!.g}, ${bandColors[0]!.b}, ${opacity})`,
-    middle: `rgba(${bandColors[1]!.r}, ${bandColors[1]!.g}, ${bandColors[1]!.b}, ${opacity})`,
-    bottom: `rgba(${bandColors[2]!.r}, ${bandColors[2]!.g}, ${bandColors[2]!.b}, ${opacity})`,
-    dominant: `rgba(${domR}, ${domG}, ${domB}, ${opacity})`,
+    topColor: bandColors[0]!,
+    middleColor: bandColors[1]!,
+    bottomColor: bandColors[2]!,
   };
 }

@@ -1,28 +1,10 @@
 {
   "image": "test-assets/test-image-travel.png",
-  "imageType": "full",
+  "composition": "bottomRight",
   "account": "everyday",
-  "gradient": {
-    "color": "rgba(255, 255, 255, 0.85)",
-    "width": 55
-  },
   "fields": [
-    {
-      "type": "heading",
-      "content": "Travel Savings Account",
-      "fontSize": 64,
-      "color": "#FA1432"
-    },
-    {
-      "type": "subheading",
-      "content": "for the explorer in you",
-      "fontSize": 40,
-      "fontStyle": "italic"
-    },
-    {
-      "type": "cta",
-      "content": "Open Account Now",
-      "fontSize": 28
-    }
+    { "type": "heading", "content": "Travel Savings Account", "fontSize": 64, "color": "#FA1432" },
+    { "type": "subheading", "content": "for the explorer in you", "fontSize": 40, "fontStyle": "italic" },
+    { "type": "cta", "content": "Open Account Now", "fontSize": 28 }
   ]
 }

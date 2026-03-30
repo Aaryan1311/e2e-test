@@ -1,20 +1,22 @@
 import { z } from "zod";
 
 /**
- * Image types determine how the text zone is detected.
+ * Composition describes where the subject is in the image,
+ * which determines where text is placed.
  *
- * "split" — Image has a solid color panel (usually Kotak Red).
- *           The engine detects this panel area — that's the text zone.
+ * "bottomRight" — Subject is in the bottom-right area.
+ *                  Text zone: top-left portion of the image.
+ *                  Gradient: fades from left toward the subject.
  *
- * "full" — Full-bleed photograph with a subject.
- *          Engine detects subject position, places text on the opposite side.
- *          Engine adds a gradient overlay on the text zone for readability.
+ * "bottomCenter" — Subject is centered in the lower portion.
+ *                   Text zone: top portion of the image, full width.
+ *                   Gradient: fades from top downward toward the subject.
  *
- * "portrait" — Subject is prominent in the lower/center area.
- *              Text goes ABOVE the subject in the upper portion of the image.
- *              Engine adds a gradient overlay on the text zone for readability.
+ * "halfAndHalf" — Image is pre-split (e.g., red panel on left, photo on right).
+ *                  Text zone: the solid-color panel area.
+ *                  NO gradient needed — text sits on the solid panel.
  */
-export type ImageType = "split" | "full" | "portrait";
+export type Composition = "bottomRight" | "bottomCenter" | "halfAndHalf";
 
 /**
  * A text field to render on the image.
@@ -82,7 +84,7 @@ export interface FieldStyleRule {
  */
 export interface JobConfig {
   image?: string;
-  imageType: ImageType;
+  composition: Composition;
   account: string;
   header?: HeaderConfig;
   gradient?: GradientConfig;
@@ -214,7 +216,7 @@ export const GradientConfigSchema = z.object({
 
 export const JobConfigSchema = z.object({
   image: z.string().optional(),
-  imageType: z.enum(["split", "full", "portrait"]),
+  composition: z.enum(["bottomRight", "bottomCenter", "halfAndHalf"]),
   account: z.string(),
   header: HeaderConfigSchema.optional(),
   gradient: GradientConfigSchema.optional(),

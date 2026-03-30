@@ -1,9 +1,10 @@
 {
   "image": "test-assets/test-image-travel.png",
-  "composition": "bottomRight",
+  "composition": "bottomCenter",
   "account": "everyday",
-  "gradient": {
-    "width": 55
+  "header": {
+    "productName": "Corporate Employee Solutions",
+    "productNameColor": "#00005A"
   },
   "fields": [
     { "type": "heading", "content": "Unlock the<br>Exclusive Rewards" },

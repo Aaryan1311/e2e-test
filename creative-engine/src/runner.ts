@@ -7,7 +7,6 @@ import type {
   HeaderConfig,
   ResolvedHeader,
   Theme,
-  FieldOverrides,
 } from "./types/index.js";
 import { JobConfigSchema } from "./types/index.js";
 import { getTheme } from "./config/themes.js";
@@ -15,8 +14,8 @@ import { detectTextZone } from "./engine/text-zone-detector.js";
 import { calculateSizes } from "./engine/dynamic-sizer.js";
 import type { SizedField } from "./engine/dynamic-sizer.js";
 import { compose } from "./engine/composer.js";
-import { analyzeGradientColors } from "./engine/gradient-analyzer.js";
-import type { GradientColors } from "./engine/gradient-analyzer.js";
+import { analyzeImageColors } from "./engine/gradient-analyzer.js";
+import type { AnalyzedGradient } from "./engine/gradient-analyzer.js";
 
 export async function runJob(jobDir: string): Promise<void> {
   const startTime = Date.now();
@@ -32,7 +31,6 @@ export async function runJob(jobDir: string): Promise<void> {
   const config: JobConfig = JobConfigSchema.parse(JSON.parse(configRaw));
 
   // 3. Find the background image
-  // config.image is resolved relative to cwd (project root), not the input dir
   let imagePath: string;
   if (config.image) {
     imagePath = path.resolve(config.image);
@@ -43,7 +41,7 @@ export async function runJob(jobDir: string): Promise<void> {
 
   console.log(`[Job] Starting: ${path.basename(jobDir)}`);
   console.log(`[Job] Image: ${path.relative(jobDir, imagePath)}`);
-  console.log(`[Job] Type: ${config.imageType}, Account: ${config.account}`);
+  console.log(`[Job] Composition: ${config.composition}, Account: ${config.account}`);
   console.log(`[Job] Fields: ${config.fields.length}`);
 
   // 4. Read image dimensions
@@ -56,21 +54,17 @@ export async function runJob(jobDir: string): Promise<void> {
   const theme = getTheme(config.account);
 
   // 6. Detect text zone
-  const textZoneResult = await detectTextZone(imagePath, config.imageType, theme);
+  const textZoneResult = await detectTextZone(imagePath, config.composition, theme);
   console.log(
     `[Job] Text zone: ${Math.round(textZoneResult.textZone.width)}x${Math.round(textZoneResult.textZone.height)} at (${Math.round(textZoneResult.textZone.x)}, ${Math.round(textZoneResult.textZone.y)})`,
   );
 
-  // 7. Analyze gradient colors (for non-solid backgrounds)
-  let gradientColors: GradientColors | undefined;
+  // 7. Analyze gradient colors (only if overlay needed)
+  let gradientColors: AnalyzedGradient | null = null;
   if (textZoneResult.needsOverlay && !config.gradient?.color) {
-    gradientColors = await analyzeGradientColors(
-      imagePath,
-      textZoneResult.textZone,
-      width,
-      height,
-    );
-    console.log(`[Job] Gradient colors: ${gradientColors.dominant}`);
+    gradientColors = await analyzeImageColors(imagePath, textZoneResult.textZone);
+    const d = gradientColors.topColor;
+    console.log(`[Job] Gradient colors: rgb(${d.r}, ${d.g}, ${d.b})`);
   }
 
   // 8. Calculate header space (if header exists)
@@ -109,7 +103,6 @@ export async function runJob(jobDir: string): Promise<void> {
     height,
     {
       ...textZoneResult,
-      // Use the adjusted text zone for field rendering
       textZone: fieldsTextZone,
     },
     { ...sizingResult, fields: finalFields },
@@ -117,6 +110,7 @@ export async function runJob(jobDir: string): Promise<void> {
     headerConfig,
     config.gradient,
     gradientColors,
+    config.composition,
   );
 
   // 13. Save outputs

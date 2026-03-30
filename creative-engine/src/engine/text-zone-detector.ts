@@ -1,23 +1,20 @@
 import sharp from "sharp";
-import type { BoundingBox, ImageType, Theme } from "../types/index.js";
+import type { Composition, BoundingBox, Theme } from "../types/index.js";
 
 export interface TextZoneResult {
   textZone: BoundingBox;
   isOnSolidBackground: boolean;
   solidBackgroundColor?: string;
   needsOverlay: boolean;
-  overlayZone?: BoundingBox;
-  textSide?: "left" | "right" | "top";
-  subjectStartX?: number;
-  subjectStartY?: number;
+  subjectBounds: BoundingBox;
 }
 
 /**
- * Detects where text should be placed on the image based on image type.
+ * Detects where text should be placed on the image based on composition type.
  */
 export async function detectTextZone(
   imagePath: string,
-  imageType: ImageType,
+  composition: Composition,
   theme: Theme,
 ): Promise<TextZoneResult> {
   const image = sharp(imagePath);
@@ -25,20 +22,227 @@ export async function detectTextZone(
   const width = metadata.width!;
   const height = metadata.height!;
 
-  switch (imageType) {
-    case "split":
-      return detectSplitZone(imagePath, width, height, theme);
-    case "full":
-      return detectFullZone(imagePath, width, height);
-    case "portrait":
-      return detectPortraitZone(imagePath, width, height);
+  switch (composition) {
+    case "bottomRight":
+      return detectBottomRight(imagePath, width, height);
+    case "bottomCenter":
+      return detectBottomCenter(imagePath, width, height);
+    case "halfAndHalf":
+      return detectHalfAndHalf(imagePath, width, height, theme);
   }
 }
 
 /**
- * For split images: detect the solid color panel and use it as the text zone.
+ * bottomRight: Subject in bottom-right, text in top-left.
+ * Uses a 6x6 grid variance analysis to find where the subject starts.
  */
-async function detectSplitZone(
+async function detectBottomRight(
+  imagePath: string,
+  width: number,
+  height: number,
+): Promise<TextZoneResult> {
+  const gridSize = 6;
+  const thumbW = gridSize * 16; // 96px
+  const thumbH = gridSize * 16;
+
+  const { data } = await sharp(imagePath)
+    .resize(thumbW, thumbH, { fit: "fill" })
+    .raw()
+    .ensureAlpha()
+    .toBuffer({ resolveWithObject: true });
+
+  const channels = 4;
+  const cellW = thumbW / gridSize;
+  const cellH = thumbH / gridSize;
+
+  // Calculate variance for each cell
+  const cellVariance: number[][] = [];
+  for (let row = 0; row < gridSize; row++) {
+    cellVariance[row] = [];
+    for (let col = 0; col < gridSize; col++) {
+      const pixels: number[] = [];
+      for (let y = Math.floor(row * cellH); y < Math.floor((row + 1) * cellH); y++) {
+        for (let x = Math.floor(col * cellW); x < Math.floor((col + 1) * cellW); x++) {
+          const idx = (y * thumbW + x) * channels;
+          const gray = data[idx]! * 0.299 + data[idx + 1]! * 0.587 + data[idx + 2]! * 0.114;
+          pixels.push(gray);
+        }
+      }
+      const mean = pixels.reduce((a, b) => a + b, 0) / pixels.length;
+      const variance = pixels.reduce((a, b) => a + (b - mean) ** 2, 0) / pixels.length;
+      cellVariance[row]![col] = variance;
+    }
+  }
+
+  // Find average variance to use as threshold
+  let totalVar = 0;
+  let cellCount = 0;
+  for (let row = 0; row < gridSize; row++) {
+    for (let col = 0; col < gridSize; col++) {
+      totalVar += cellVariance[row]![col]!;
+      cellCount++;
+    }
+  }
+  const avgVariance = totalVar / cellCount;
+  const threshold = avgVariance * 1.2;
+
+  // Find leftmost column where bottom rows have high variance (subject edge)
+  let subjectLeftCol = gridSize;
+  for (let col = 0; col < gridSize; col++) {
+    // Check bottom half of this column
+    let highCount = 0;
+    for (let row = Math.floor(gridSize / 2); row < gridSize; row++) {
+      if (cellVariance[row]![col]! > threshold) highCount++;
+    }
+    if (highCount >= Math.floor(gridSize / 4)) {
+      subjectLeftCol = col;
+      break;
+    }
+  }
+
+  // Find topmost row where right cols have high variance
+  let subjectTopRow = gridSize;
+  for (let row = 0; row < gridSize; row++) {
+    let highCount = 0;
+    for (let col = Math.floor(gridSize / 2); col < gridSize; col++) {
+      if (cellVariance[row]![col]! > threshold) highCount++;
+    }
+    if (highCount >= Math.floor(gridSize / 4)) {
+      subjectTopRow = row;
+      break;
+    }
+  }
+
+  const subjectLeftEdge = Math.round((subjectLeftCol / gridSize) * width);
+  const subjectTopEdge = Math.round((subjectTopRow / gridSize) * height);
+
+  const subjectBounds: BoundingBox = {
+    x: subjectLeftEdge,
+    y: subjectTopEdge,
+    width: width - subjectLeftEdge,
+    height: height - subjectTopEdge,
+  };
+
+  const padding = Math.round(width * 0.05);
+  const buffer = Math.round(width * 0.05);
+
+  let textZoneWidth = subjectLeftEdge - padding * 2 - buffer;
+  textZoneWidth = Math.max(textZoneWidth, Math.round(width * 0.30));
+  textZoneWidth = Math.min(textZoneWidth, Math.round(width * 0.60));
+
+  const textZone: BoundingBox = {
+    x: padding,
+    y: padding,
+    width: textZoneWidth,
+    height: height - padding * 2,
+  };
+
+  return {
+    textZone,
+    isOnSolidBackground: false,
+    needsOverlay: true,
+    subjectBounds,
+  };
+}
+
+/**
+ * bottomCenter: Subject centered in lower portion, text at top full-width.
+ * Scans 8 horizontal bands to find where subject variance spikes.
+ */
+async function detectBottomCenter(
+  imagePath: string,
+  width: number,
+  height: number,
+): Promise<TextZoneResult> {
+  const bandCount = 8;
+  const thumbW = 64;
+  const thumbH = bandCount * 16; // 128px
+
+  const { data } = await sharp(imagePath)
+    .resize(thumbW, thumbH, { fit: "fill" })
+    .raw()
+    .ensureAlpha()
+    .toBuffer({ resolveWithObject: true });
+
+  const channels = 4;
+  const bandH = thumbH / bandCount;
+  const bandVariances: number[] = [];
+
+  for (let band = 0; band < bandCount; band++) {
+    const pixels: number[] = [];
+    for (let y = Math.floor(band * bandH); y < Math.floor((band + 1) * bandH); y++) {
+      for (let x = 0; x < thumbW; x++) {
+        const idx = (y * thumbW + x) * channels;
+        const gray = data[idx]! * 0.299 + data[idx + 1]! * 0.587 + data[idx + 2]! * 0.114;
+        pixels.push(gray);
+      }
+    }
+    const mean = pixels.reduce((a, b) => a + b, 0) / pixels.length;
+    const variance = pixels.reduce((a, b) => a + (b - mean) ** 2, 0) / pixels.length;
+    bandVariances.push(variance);
+  }
+
+  // Find where variance jumps significantly (subject starts)
+  let subjectBand = bandCount; // default: bottom
+  for (let i = 1; i < bandCount; i++) {
+    const prev = bandVariances[i - 1]!;
+    const curr = bandVariances[i]!;
+    if (prev > 0 && curr > prev * 2) {
+      subjectBand = i;
+      break;
+    }
+  }
+
+  // Fallback: if no significant jump found, use average-based threshold
+  if (subjectBand === bandCount) {
+    const avgVar = bandVariances.reduce((a, b) => a + b, 0) / bandCount;
+    for (let i = 1; i < bandCount; i++) {
+      if (bandVariances[i]! > avgVar * 1.3) {
+        subjectBand = i;
+        break;
+      }
+    }
+  }
+
+  const subjectTopEdge = Math.round((subjectBand / bandCount) * height);
+
+  const subjectBounds: BoundingBox = {
+    x: 0,
+    y: subjectTopEdge,
+    width,
+    height: height - subjectTopEdge,
+  };
+
+  const paddingX = Math.round(width * 0.06);
+  const paddingTop = Math.round(height * 0.04);
+  const buffer = Math.round(height * 0.10);
+
+  let textZoneBottom = subjectTopEdge - buffer;
+  // Minimum text zone height: 20% of image
+  if (textZoneBottom - paddingTop < height * 0.20) {
+    textZoneBottom = paddingTop + Math.round(height * 0.20);
+  }
+
+  const textZone: BoundingBox = {
+    x: paddingX,
+    y: paddingTop,
+    width: width - paddingX * 2,
+    height: textZoneBottom - paddingTop,
+  };
+
+  return {
+    textZone,
+    isOnSolidBackground: false,
+    needsOverlay: true,
+    subjectBounds,
+  };
+}
+
+/**
+ * halfAndHalf: Pre-split image with a solid color panel.
+ * Detects the panel and uses it as text zone. No gradient.
+ */
+async function detectHalfAndHalf(
   imagePath: string,
   width: number,
   height: number,
@@ -49,11 +253,11 @@ async function detectSplitZone(
     .ensureAlpha()
     .toBuffer({ resolveWithObject: true });
 
-  const channels = 4; // RGBA
+  const channels = 4;
 
-  // Sample vertical strips at 5% and 95% of width
-  const leftX = Math.floor(width * 0.05);
-  const rightX = Math.floor(width * 0.95);
+  // Sample vertical strips near left and right edges
+  const leftX = Math.floor(width * 0.02);
+  const rightX = Math.floor(width * 0.98);
 
   const leftColors = sampleVerticalStrip(data, width, height, channels, leftX);
   const rightColors = sampleVerticalStrip(data, width, height, channels, rightX);
@@ -61,7 +265,6 @@ async function detectSplitZone(
   const leftSolid = isStripSolid(leftColors);
   const rightSolid = isStripSolid(rightColors);
 
-  // Parse primary color for matching
   const primaryRGB = hexToRGB(theme.colors.primary);
 
   let panelSide: "left" | "right" | null = null;
@@ -88,36 +291,39 @@ async function detectSplitZone(
   }
 
   if (!panelSide) {
-    // Fallback: treat left 45% as text zone with overlay
-    console.warn("[TextZoneDetector] No solid panel detected, using left 45% fallback with overlay");
-    const padding = width * 0.06;
+    // Fallback: treat left 45% as text zone
+    console.warn("[TextZoneDetector] No solid panel detected, using left 45% fallback");
+    const padding = Math.round(width * 0.06);
     return {
       textZone: {
         x: padding,
-        y: height * 0.08,
-        width: width * 0.45 - padding * 2,
-        height: height * 0.84,
+        y: Math.round(height * 0.08),
+        width: Math.round(width * 0.45) - padding * 2,
+        height: Math.round(height * 0.84),
       },
       isOnSolidBackground: false,
       needsOverlay: true,
-      overlayZone: {
-        x: 0,
+      subjectBounds: {
+        x: Math.round(width * 0.45),
         y: 0,
-        width: width * 0.6,
+        width: Math.round(width * 0.55),
         height,
       },
-      textSide: "left",
     };
   }
 
   // Binary search for panel edge
   const panelWidth = findPanelEdge(data, width, height, channels, panelSide);
-  const padding = panelWidth * 0.08;
+  const padding = Math.round(panelWidth * 0.08);
   const panelX = panelSide === "left" ? 0 : width - panelWidth;
 
   const colorHex = detectedColor
     ? `#${detectedColor.r.toString(16).padStart(2, "0")}${detectedColor.g.toString(16).padStart(2, "0")}${detectedColor.b.toString(16).padStart(2, "0")}`
     : theme.colors.primary;
+
+  // Subject bounds = the photo side (non-panel)
+  const subjectX = panelSide === "left" ? panelWidth : 0;
+  const subjectW = width - panelWidth;
 
   return {
     textZone: {
@@ -129,169 +335,12 @@ async function detectSplitZone(
     isOnSolidBackground: true,
     solidBackgroundColor: colorHex,
     needsOverlay: false,
-    textSide: panelSide,
-  };
-}
-
-/**
- * For full images: detect subject and place text on the opposite side.
- */
-async function detectFullZone(
-  imagePath: string,
-  width: number,
-  height: number,
-): Promise<TextZoneResult> {
-  const { data } = await sharp(imagePath)
-    .resize(64, 64, { fit: "fill" })
-    .raw()
-    .ensureAlpha()
-    .toBuffer({ resolveWithObject: true });
-
-  // 4x4 grid variance analysis
-  const gridCols = 4;
-  const gridRows = 4;
-  const cellW = 64 / gridCols;
-  const cellH = 64 / gridRows;
-  const channels = 4;
-
-  const columnVariance = new Array(gridCols).fill(0);
-
-  for (let col = 0; col < gridCols; col++) {
-    let totalVariance = 0;
-    for (let row = 0; row < gridRows; row++) {
-      const pixels: number[] = [];
-      for (let y = Math.floor(row * cellH); y < Math.floor((row + 1) * cellH); y++) {
-        for (let x = Math.floor(col * cellW); x < Math.floor((col + 1) * cellW); x++) {
-          const idx = (y * 64 + x) * channels;
-          const gray = data[idx]! * 0.299 + data[idx + 1]! * 0.587 + data[idx + 2]! * 0.114;
-          pixels.push(gray);
-        }
-      }
-      const mean = pixels.reduce((a, b) => a + b, 0) / pixels.length;
-      const variance = pixels.reduce((a, b) => a + (b - mean) ** 2, 0) / pixels.length;
-      totalVariance += variance;
-    }
-    columnVariance[col] = totalVariance / gridRows;
-  }
-
-  // Subject is in columns with highest variance
-  const leftAvg = (columnVariance[0]! + columnVariance[1]!) / 2;
-  const rightAvg = (columnVariance[2]! + columnVariance[3]!) / 2;
-
-  const subjectOnRight = rightAvg >= leftAvg;
-  const textSide = subjectOnRight ? "left" : "right";
-
-  // Calculate subject start X: where the high-variance columns begin
-  // Each column covers 25% of width (4 columns total)
-  const subjectStartX = subjectOnRight
-    ? Math.round(width * 0.5)   // subject in right half
-    : 0;                         // subject in left half
-
-  const textZoneWidth = Math.floor(width * 0.48);
-  const paddingX = Math.floor(width * 0.06);
-  const paddingY = Math.floor(height * 0.08);
-
-  const textZoneX = textSide === "left" ? paddingX : width - textZoneWidth - paddingX;
-
-  const overlayX = textSide === "left" ? 0 : width - textZoneWidth - paddingX - width * 0.15;
-  const overlayWidth = textZoneWidth + paddingX + width * 0.15;
-
-  return {
-    textZone: {
-      x: textZoneX,
-      y: paddingY,
-      width: textZoneWidth - paddingX,
-      height: height - paddingY * 2,
-    },
-    isOnSolidBackground: false,
-    needsOverlay: true,
-    overlayZone: {
-      x: Math.max(0, overlayX),
+    subjectBounds: {
+      x: subjectX,
       y: 0,
-      width: Math.min(overlayWidth, width),
+      width: subjectW,
       height,
     },
-    textSide,
-    subjectStartX,
-  };
-}
-
-/**
- * For portrait images: detect subject in lower area, place text above.
- */
-async function detectPortraitZone(
-  imagePath: string,
-  width: number,
-  height: number,
-): Promise<TextZoneResult> {
-  const { data } = await sharp(imagePath)
-    .resize(64, 96, { fit: "fill" })
-    .raw()
-    .ensureAlpha()
-    .toBuffer({ resolveWithObject: true });
-
-  // 4x6 grid (6 rows)
-  const gridCols = 4;
-  const gridRows = 6;
-  const cellW = 64 / gridCols;
-  const cellH = 96 / gridRows;
-  const channels = 4;
-
-  const rowVariance: number[] = [];
-
-  for (let row = 0; row < gridRows; row++) {
-    let totalVariance = 0;
-    for (let col = 0; col < gridCols; col++) {
-      const pixels: number[] = [];
-      for (let y = Math.floor(row * cellH); y < Math.floor((row + 1) * cellH); y++) {
-        for (let x = Math.floor(col * cellW); x < Math.floor((col + 1) * cellW); x++) {
-          const idx = (y * 64 + x) * channels;
-          const gray = data[idx]! * 0.299 + data[idx + 1]! * 0.587 + data[idx + 2]! * 0.114;
-          pixels.push(gray);
-        }
-      }
-      const mean = pixels.reduce((a, b) => a + b, 0) / pixels.length;
-      const variance = pixels.reduce((a, b) => a + (b - mean) ** 2, 0) / pixels.length;
-      totalVariance += variance;
-    }
-    rowVariance.push(totalVariance / gridCols);
-  }
-
-  // Find where variance significantly increases (subject edge)
-  const avgVariance = rowVariance.reduce((a, b) => a + b, 0) / rowVariance.length;
-  let subjectStartRow = gridRows; // default: bottom
-
-  for (let row = 1; row < gridRows; row++) {
-    if (rowVariance[row]! > avgVariance * 1.3) {
-      subjectStartRow = row;
-      break;
-    }
-  }
-
-  // Convert row to pixel position
-  const subjectStartY = (subjectStartRow / gridRows) * height;
-  const minTextHeight = height * 0.25;
-
-  const textZoneHeight = Math.max(subjectStartY - height * 0.1, minTextHeight);
-  const paddingX = Math.floor(width * 0.06);
-
-  return {
-    textZone: {
-      x: paddingX,
-      y: Math.floor(height * 0.05),
-      width: Math.floor(width * 0.88),
-      height: Math.floor(textZoneHeight),
-    },
-    isOnSolidBackground: false,
-    needsOverlay: true,
-    overlayZone: {
-      x: 0,
-      y: 0,
-      width,
-      height: Math.floor(textZoneHeight + height * 0.25),
-    },
-    textSide: "top",
-    subjectStartY: Math.round(subjectStartY),
   };
 }
 
@@ -305,7 +354,7 @@ function sampleVerticalStrip(
   x: number,
 ): Array<{ r: number; g: number; b: number }> {
   const samples: Array<{ r: number; g: number; b: number }> = [];
-  const step = Math.max(1, Math.floor(height / 50)); // ~50 samples
+  const step = Math.max(1, Math.floor(height / 50));
   for (let y = 0; y < height; y += step) {
     const idx = (y * width + x) * channels;
     samples.push({
@@ -367,11 +416,9 @@ function findPanelEdge(
   channels: number,
   side: "left" | "right",
 ): number {
-  // Binary search for the panel edge
   let lo = Math.floor(width * 0.1);
   let hi = Math.floor(width * 0.7);
 
-  // Get reference color from the panel side
   const refX = side === "left" ? Math.floor(width * 0.05) : Math.floor(width * 0.95);
   const refColors = sampleVerticalStrip(data, width, height, channels, refX);
   const refSolid = isStripSolid(refColors);

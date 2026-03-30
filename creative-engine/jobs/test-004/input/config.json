@@ -1,6 +1,6 @@
 {
   "image": "test-assets/test-image-travel.png",
-  "imageType": "full",
+  "composition": "bottomRight",
   "account": "everyday",
   "fields": [
     { "type": "heading", "content": "Explore the World" },

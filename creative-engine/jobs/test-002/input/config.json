@@ -1,24 +1,14 @@
 {
   "image": "test-assets/test-image-travel.png",
-  "imageType": "full",
+  "composition": "bottomRight",
   "account": "everyday",
   "header": {
     "logo": "logo.png",
     "productName": "Corporate Employee Solutions",
     "productNameColor": "#00005A"
   },
-  "gradient": {
-    "color": "rgba(255, 255, 255, 0.8)",
-    "width": 50
-  },
   "fields": [
-    {
-      "type": "heading",
-      "content": "Unlock the<br>Exclusive Rewards"
-    },
-    {
-      "type": "subheading",
-      "content": "Unlock Exclusive Rewards"
-    }
+    { "type": "heading", "content": "Unlock the<br>Exclusive Rewards" },
+    { "type": "subheading", "content": "Unlock Exclusive Rewards" }
   ]
 }

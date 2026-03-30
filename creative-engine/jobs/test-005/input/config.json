@@ -1,6 +1,6 @@
 {
   "image": "test-assets/test-image-travel.png",
-  "imageType": "portrait",
+  "composition": "bottomCenter",
   "account": "everyday",
   "fields": [
     { "type": "heading", "content": "Your dream home" },
