@@ -15,6 +15,8 @@ import { detectTextZone } from "./engine/text-zone-detector.js";
 import { calculateSizes } from "./engine/dynamic-sizer.js";
 import type { SizedField } from "./engine/dynamic-sizer.js";
 import { compose } from "./engine/composer.js";
+import { analyzeGradientColors } from "./engine/gradient-analyzer.js";
+import type { GradientColors } from "./engine/gradient-analyzer.js";
 
 export async function runJob(jobDir: string): Promise<void> {
   const startTime = Date.now();
@@ -53,7 +55,19 @@ export async function runJob(jobDir: string): Promise<void> {
     `[Job] Text zone: ${Math.round(textZoneResult.textZone.width)}x${Math.round(textZoneResult.textZone.height)} at (${Math.round(textZoneResult.textZone.x)}, ${Math.round(textZoneResult.textZone.y)})`,
   );
 
-  // 7. Calculate header space (if header exists)
+  // 7. Analyze gradient colors (for non-solid backgrounds)
+  let gradientColors: GradientColors | undefined;
+  if (textZoneResult.needsOverlay && !config.gradient?.color) {
+    gradientColors = await analyzeGradientColors(
+      imagePath,
+      textZoneResult.textZone,
+      width,
+      height,
+    );
+    console.log(`[Job] Gradient colors: ${gradientColors.dominant}`);
+  }
+
+  // 8. Calculate header space (if header exists)
   let headerHeight = 0;
   let headerConfig: ResolvedHeader | null = null;
   if (config.header) {
@@ -62,14 +76,14 @@ export async function runJob(jobDir: string): Promise<void> {
     console.log(`[Job] Header height: ${headerHeight}px`);
   }
 
-  // 8. Adjust text zone to account for header — fields start BELOW the header
+  // 9. Adjust text zone to account for header — fields start BELOW the header
   const fieldsTextZone = {
     ...textZoneResult.textZone,
     y: textZoneResult.textZone.y + headerHeight,
     height: textZoneResult.textZone.height - headerHeight,
   };
 
-  // 9. Calculate dynamic sizes for fields
+  // 10. Calculate dynamic sizes for fields
   const textFields = config.fields.map((f) => ({
     type: f.type,
     content: f.content,
@@ -77,12 +91,12 @@ export async function runJob(jobDir: string): Promise<void> {
   }));
   const sizingResult = calculateSizes(textFields, fieldsTextZone);
 
-  // 10. Apply field-level overrides on top of dynamic sizing
+  // 11. Apply field-level overrides on top of dynamic sizing
   const finalFields = applyOverrides(sizingResult.fields, config.fields);
 
   console.log(`[Job] Base font size: ${sizingResult.baseFontSize}px`);
 
-  // 11. Compose the final image
+  // 12. Compose the final image
   const { imageBuffer, html } = await compose(
     imagePath,
     width,
@@ -96,9 +110,10 @@ export async function runJob(jobDir: string): Promise<void> {
     theme,
     headerConfig,
     config.gradient,
+    gradientColors,
   );
 
-  // 12. Save outputs
+  // 13. Save outputs
   const resultPath = path.join(outputDir, "result.png");
   const debugPath = path.join(outputDir, "debug.html");
 

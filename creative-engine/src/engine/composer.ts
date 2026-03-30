@@ -1,8 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { Theme, FontConfig, ResolvedHeader, GradientConfig, FieldOverrides } from "../types/index.js";
+import type { Theme, FontConfig, ResolvedHeader, GradientConfig } from "../types/index.js";
 import type { SizedField, SizingResult } from "./dynamic-sizer.js";
 import type { TextZoneResult } from "./text-zone-detector.js";
+import type { GradientColors } from "./gradient-analyzer.js";
 import { generateFontFaces } from "./font-loader.js";
 import { browserPool } from "./browser-pool.js";
 
@@ -19,6 +20,7 @@ export async function compose(
   theme: Theme,
   headerConfig?: ResolvedHeader | null,
   gradientConfig?: GradientConfig,
+  gradientColors?: GradientColors,
 ): Promise<{ imageBuffer: Buffer; html: string }> {
   const imageDataURI = await readImageAsBase64(imagePath);
   const fontFaceCSS = await generateFontFaces(theme);
@@ -33,6 +35,7 @@ export async function compose(
     fontFaceCSS,
     headerConfig ?? null,
     gradientConfig,
+    gradientColors,
   );
 
   const browser = await browserPool.acquire();
@@ -84,19 +87,26 @@ function buildHTML(
   fontFaceCSS: string,
   headerConfig: ResolvedHeader | null,
   gradientConfig?: GradientConfig,
+  gradientColors?: GradientColors,
 ): string {
-  const { textZone, isOnSolidBackground, needsOverlay, textSide } = textZoneResult;
+  const { textZone, isOnSolidBackground } = textZoneResult;
   const { fields, verticalOffset } = sizingResult;
 
   // Build overlay/gradient HTML
-  const overlayHTML = renderGradient(textZoneResult, width, height, gradientConfig, theme);
+  const overlayHTML = renderGradient(
+    textZoneResult,
+    width,
+    height,
+    gradientColors,
+    gradientConfig,
+    textZoneResult.subjectStartX,
+  );
 
   // Build header HTML
   const headerHTML = headerConfig ? renderHeader(headerConfig, textZone) : "";
 
   // Build field HTML
   let cumulativeY = 0;
-  // If header exists, fields start below it (headerConfig.totalHeight already subtracted from textZone)
   const fieldDivs = fields
     .map((field) => {
       const currentY = textZone.y + verticalOffset + cumulativeY;
@@ -150,46 +160,80 @@ function renderGradient(
   textZoneResult: TextZoneResult,
   imageWidth: number,
   imageHeight: number,
+  gradientColors: GradientColors | undefined,
   gradientConfig: GradientConfig | undefined,
-  theme: Theme,
+  subjectStartX?: number,
 ): string {
   if (!textZoneResult.needsOverlay) return "";
   if (gradientConfig?.enabled === false) return "";
 
-  const color = gradientConfig?.color ?? theme.colors.overlay;
-  const widthPercent = gradientConfig?.width ?? 55;
-  const gradientWidth = Math.round(imageWidth * (widthPercent / 100));
+  const useCustomColor = gradientConfig?.color != null;
 
-  let direction = gradientConfig?.direction;
-  if (!direction) {
-    if (textZoneResult.textSide === "right") {
-      direction = "to left";
-    } else if (textZoneResult.textSide === "top") {
-      direction = "to bottom";
-    } else {
-      direction = "to right";
-    }
+  // Calculate gradient end point
+  let gradientEndPercent = gradientConfig?.width ?? 55;
+  if (subjectStartX && !gradientConfig?.width) {
+    const buffer = imageWidth * 0.10;
+    gradientEndPercent = Math.round(((subjectStartX - buffer) / imageWidth) * 100);
+    gradientEndPercent = Math.max(gradientEndPercent, 30);
+    gradientEndPercent = Math.min(gradientEndPercent, 70);
   }
 
-  let overlayX = 0;
-  let overlayWidth = gradientWidth;
+  const isPortrait = textZoneResult.textSide === "top";
+  let gradientCSS: string;
 
-  if (direction === "to right") {
-    overlayX = 0;
-  } else if (direction === "to left") {
-    overlayX = imageWidth - gradientWidth;
+  if (isPortrait) {
+    // Portrait mode: vertical gradient from top
+    if (useCustomColor) {
+      const color = gradientConfig!.color!;
+      gradientCSS = `linear-gradient(to bottom, ${color} 0%, ${color} 50%, transparent 85%)`;
+    } else if (gradientColors) {
+      gradientCSS = `linear-gradient(to bottom,
+        ${gradientColors.top} 0%,
+        ${gradientColors.middle} 40%,
+        ${gradientColors.bottom} 65%,
+        transparent 90%)`;
+    } else {
+      gradientCSS = `linear-gradient(to bottom, rgba(255,255,255,0.88) 0%, rgba(255,255,255,0.88) 50%, transparent 85%)`;
+    }
+  } else if (textZoneResult.textSide === "right") {
+    // Text on right — gradient from right
+    if (useCustomColor) {
+      const color = gradientConfig!.color!;
+      const dir = gradientConfig?.direction ?? "to left";
+      gradientCSS = `linear-gradient(${dir}, ${color} 0%, ${color} ${gradientEndPercent * 0.6}%, transparent ${gradientEndPercent}%)`;
+    } else if (gradientColors) {
+      gradientCSS = `linear-gradient(to left,
+        ${gradientColors.top} 0%,
+        ${gradientColors.middle} ${gradientEndPercent * 0.5}%,
+        ${gradientColors.bottom} ${gradientEndPercent * 0.75}%,
+        transparent ${gradientEndPercent}%)`;
+    } else {
+      gradientCSS = `linear-gradient(to left, rgba(255,255,255,0.88) 0%, rgba(255,255,255,0.88) 50%, transparent 100%)`;
+    }
   } else {
-    overlayX = 0;
-    overlayWidth = imageWidth;
+    // Text on left (default) — gradient from left
+    if (useCustomColor) {
+      const color = gradientConfig!.color!;
+      const dir = gradientConfig?.direction ?? "to right";
+      gradientCSS = `linear-gradient(${dir}, ${color} 0%, ${color} ${gradientEndPercent * 0.6}%, transparent ${gradientEndPercent}%)`;
+    } else if (gradientColors) {
+      gradientCSS = `linear-gradient(to right,
+        ${gradientColors.top} 0%,
+        ${gradientColors.middle} ${gradientEndPercent * 0.5}%,
+        ${gradientColors.bottom} ${gradientEndPercent * 0.75}%,
+        transparent ${gradientEndPercent}%)`;
+    } else {
+      gradientCSS = `linear-gradient(to right, rgba(255,255,255,0.88) 0%, rgba(255,255,255,0.88) 50%, transparent 100%)`;
+    }
   }
 
   return `<div style="
     position: absolute;
-    left: ${overlayX}px;
+    left: 0;
     top: 0;
-    width: ${overlayWidth}px;
+    width: ${imageWidth}px;
     height: ${imageHeight}px;
-    background: linear-gradient(${direction}, ${color} 0%, ${color} 50%, transparent 100%);
+    background: ${gradientCSS};
     z-index: 2;
   "></div>`;
 }
@@ -214,7 +258,6 @@ function renderHeader(
 
   if (!logoHTML && !nameHTML) return "";
 
-  // Header is pinned at the original text zone top (before header height was subtracted)
   const headerTop = textZone.y - header.totalHeight + header.paddingTop;
 
   return `<div style="
@@ -290,7 +333,6 @@ function renderFieldContent(
     case "cta": {
       const bgColor = isOnSolid ? theme.colors.onPrimary : theme.colors.primary;
       const fgColor = isOnSolid ? theme.colors.primary : theme.colors.onPrimary;
-      // Use override color for CTA text if specified
       const overrideColor = field.overrides?.color;
       return `<div style="
         display: inline-block;
@@ -306,16 +348,11 @@ function renderFieldContent(
       return `<span style="opacity: 0.7;">${escapeHTML(field.content)}</span>`;
 
     default:
-      // Support <br> tags in content — pass through as raw HTML
       return escapeSafe(field.content);
   }
 }
 
-/**
- * Escapes HTML but preserves <br> and <br/> tags for explicit line breaks.
- */
 function escapeSafe(text: string): string {
-  // First split on <br> variants, escape each part, then rejoin with <br>
   const parts = text.split(/<br\s*\/?>/gi);
   return parts.map(escapeHTML).join("<br>");
 }

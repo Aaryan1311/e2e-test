@@ -8,6 +8,8 @@ export interface TextZoneResult {
   needsOverlay: boolean;
   overlayZone?: BoundingBox;
   textSide?: "left" | "right" | "top";
+  subjectStartX?: number;
+  subjectStartY?: number;
 }
 
 /**
@@ -179,6 +181,12 @@ async function detectFullZone(
   const subjectOnRight = rightAvg >= leftAvg;
   const textSide = subjectOnRight ? "left" : "right";
 
+  // Calculate subject start X: where the high-variance columns begin
+  // Each column covers 25% of width (4 columns total)
+  const subjectStartX = subjectOnRight
+    ? Math.round(width * 0.5)   // subject in right half
+    : 0;                         // subject in left half
+
   const textZoneWidth = Math.floor(width * 0.48);
   const paddingX = Math.floor(width * 0.06);
   const paddingY = Math.floor(height * 0.08);
@@ -204,6 +212,7 @@ async function detectFullZone(
       height,
     },
     textSide,
+    subjectStartX,
   };
 }
 
@@ -282,6 +291,7 @@ async function detectPortraitZone(
       height: Math.floor(textZoneHeight + height * 0.25),
     },
     textSide: "top",
+    subjectStartY: Math.round(subjectStartY),
   };
 }
 
