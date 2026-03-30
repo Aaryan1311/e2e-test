@@ -5,7 +5,6 @@ import sharp from "sharp";
 import { browserPool } from "../src/engine/browser-pool.js";
 
 const JOBS = ["test-001", "test-002", "test-003", "test-004", "test-005"];
-const TEST_IMAGE = "./test-assets/test-image-travel.png";
 
 async function createPlaceholderLogo(outputPath: string): Promise<void> {
   const width = 200;
@@ -32,14 +31,6 @@ async function main() {
 
     // Ensure input dir exists
     await fs.mkdir(inputDir, { recursive: true });
-
-    // Copy test image if not present
-    const imageDest = path.join(inputDir, "image.png");
-    try {
-      await fs.access(imageDest);
-    } catch {
-      await fs.copyFile(TEST_IMAGE, imageDest);
-    }
 
     // Create placeholder logo for test-002 if needed
     if (jobName === "test-002") {

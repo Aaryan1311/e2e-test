@@ -32,11 +32,17 @@ export async function runJob(jobDir: string): Promise<void> {
   const config: JobConfig = JobConfigSchema.parse(JSON.parse(configRaw));
 
   // 3. Find the background image
-  const imageFile = await findBackgroundImage(inputDir, config.header?.logo);
-  const imagePath = path.join(inputDir, imageFile);
+  // config.image is resolved relative to cwd (project root), not the input dir
+  let imagePath: string;
+  if (config.image) {
+    imagePath = path.resolve(config.image);
+  } else {
+    const imageFile = await findBackgroundImage(inputDir, config.header?.logo);
+    imagePath = path.join(inputDir, imageFile);
+  }
 
   console.log(`[Job] Starting: ${path.basename(jobDir)}`);
-  console.log(`[Job] Image: ${imageFile}`);
+  console.log(`[Job] Image: ${path.relative(jobDir, imagePath)}`);
   console.log(`[Job] Type: ${config.imageType}, Account: ${config.account}`);
   console.log(`[Job] Fields: ${config.fields.length}`);
 

@@ -81,6 +81,7 @@ export interface FieldStyleRule {
  * Complete job configuration — read from config.json in the job's input/ folder.
  */
 export interface JobConfig {
+  image?: string;
   imageType: ImageType;
   account: string;
   header?: HeaderConfig;
@@ -212,6 +213,7 @@ export const GradientConfigSchema = z.object({
 });
 
 export const JobConfigSchema = z.object({
+  image: z.string().optional(),
   imageType: z.enum(["split", "full", "portrait"]),
   account: z.string(),
   header: HeaderConfigSchema.optional(),
