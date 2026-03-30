@@ -155,9 +155,13 @@ async function resolveHeader(
   imageHeight: number,
   theme: Theme,
 ): Promise<ResolvedHeader> {
-  const paddingTop = header.padding?.top ?? Math.round(imageHeight * 0.03);
-  const paddingLeft = header.padding?.left ?? Math.round(imageWidth * 0.06);
-  const paddingBottom = header.padding?.bottom ?? Math.round(imageHeight * 0.02);
+  const diagonal = Math.sqrt(imageWidth ** 2 + imageHeight ** 2);
+  const totalHeaderWidth = Math.round(diagonal / 3);
+
+  const paddingTop = header.padding?.top ?? Math.round(diagonal * 0.02);
+  const paddingLeft = header.padding?.left ?? Math.round(diagonal * 0.03);
+  const paddingBottom = header.padding?.bottom ?? Math.round(diagonal * 0.015);
+  const gap = header.gap ?? Math.round(diagonal * 0.008);
 
   let logoBase64: string | null = null;
   let logoW = 0;
@@ -169,14 +173,16 @@ async function resolveHeader(
       const logoBuffer = await fs.readFile(logoPath);
       const logoMeta = await sharp(logoBuffer).metadata();
 
-      logoW = header.logoWidth ?? Math.round(imageWidth * 0.12);
+      // Logo takes 35% of total header width (unless explicitly overridden)
+      logoW = header.logoWidth ?? Math.round(totalHeaderWidth * 0.35);
 
+      // Height from native aspect ratio
       if (header.logoHeight) {
         logoH = header.logoHeight;
       } else if (logoMeta.width && logoMeta.height) {
         logoH = Math.round(logoW * (logoMeta.height / logoMeta.width));
       } else {
-        logoH = Math.round(logoW * 0.4);
+        logoH = Math.round(logoW * 0.5);
       }
 
       const resizedLogo = await sharp(logoBuffer)
@@ -189,22 +195,32 @@ async function resolveHeader(
     }
   }
 
-  const productNameFontSize =
-    header.productNameFontSize ?? Math.round(Math.max(logoH * 0.45, imageHeight * 0.015));
+  // Product name font size: derived to fit remaining width
+  const productName = header.productName ?? null;
+  const productNameMaxWidth = totalHeaderWidth - logoW - gap;
+  let productNameFontSize = header.productNameFontSize ?? 16;
+
+  if (productName && !header.productNameFontSize) {
+    productNameFontSize = Math.round(productNameMaxWidth / (productName.length * 0.55));
+    productNameFontSize = Math.max(productNameFontSize, Math.round(diagonal * 0.008));
+    productNameFontSize = Math.min(productNameFontSize, Math.round(diagonal * 0.02));
+  }
 
   const contentHeight = Math.max(logoH, productNameFontSize * 1.5);
   const totalHeight = paddingTop + contentHeight + paddingBottom;
+
+  console.log(`[Job] Header: diagonal=${Math.round(diagonal)}px, totalHeaderWidth=${totalHeaderWidth}px, logoWidth=${logoW}px`);
 
   return {
     logoBase64,
     logoWidth: logoW,
     logoHeight: logoH,
-    productName: header.productName ?? null,
+    productName,
     productNameFontSize,
     productNameFontWeight: header.productNameFontWeight ?? "600",
     productNameFontFamily: header.productNameFontFamily ?? theme.fonts.body.family,
     productNameColor: header.productNameColor ?? theme.colors.heading,
-    gap: header.gap ?? 12,
+    gap,
     paddingTop,
     paddingLeft,
     paddingBottom,
